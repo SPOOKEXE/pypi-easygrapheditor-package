@@ -41,6 +41,43 @@ class FakeContainer:
         self.calls.append(("button", label))
         return False
 
+    def expander(self, label: str, *a, **k):
+        self.calls.append(("expander", label))
+        return self
+
+    def slider(self, label: str, *a, **k):
+        self.calls.append(("slider", label))
+        return k.get("value", 0)
+
+    def number_input(self, label: str, *a, **k):
+        self.calls.append(("number_input", label))
+        return k.get("value", 0)
+
+    def text_input(self, label: str, *a, **k):
+        self.calls.append(("text_input", label))
+        return k.get("value", "")
+
+    def text_area(self, label: str, *a, **k):
+        self.calls.append(("text_area", label))
+        return k.get("value", "")
+
+    def selectbox(self, label: str, options, *a, **k):
+        self.calls.append(("selectbox", label))
+        return options[k.get("index", 0)] if options else None
+
+    def checkbox(self, label: str, *a, **k):
+        self.calls.append(("checkbox", label))
+        return k.get("value", False)
+
+    def file_uploader(self, label: str, *a, **k):
+        self.calls.append(("file_uploader", label))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a) -> bool:
+        return False
+
 
 def _tiny_graph() -> Graph:
     g = Graph()

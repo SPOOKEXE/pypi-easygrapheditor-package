@@ -9,7 +9,35 @@ from typing import Any, Literal
 
 from .types import Field, Image, Number
 
-ParamKind = Literal["slider", "int", "number", "dropdown", "toggle", "text", "multiline", "file", "seed"]
+ParamKind = Literal[
+    "slider",  # legacy: continuous decimal slider
+    "float_slider",  # continuous/decimal slider (min/max/step)
+    "step_slider",  # stepped slider (snaps to step)
+    "int",  # integer numerical input
+    "number",  # decimal numerical input box
+    "seed",  # numerical input with randomize affordance
+    "text",  # single-line input box
+    "textarea",  # multi-line input box
+    "multiline",  # legacy alias of textarea
+    "dropdown",  # option picker
+    "select",  # alias of dropdown
+    "toggle",  # boolean switch
+    "checkbox",  # alias of toggle
+    "file",  # file picker (stores path string)
+]
+
+# Aliases -> canonical kind. UI layers switch on the canonical form.
+KIND_ALIASES: dict[str, str] = {
+    "slider": "float_slider",
+    "multiline": "textarea",
+    "dropdown": "select",
+    "toggle": "checkbox",
+}
+
+
+def canonical_kind(kind: str) -> str:
+    """Normalize legacy/alias param kinds to the canonical widget name."""
+    return KIND_ALIASES.get(kind, kind)
 
 
 @dataclass
@@ -37,6 +65,7 @@ class PortDef:
 class ExecCtx:
     node_id: str
     params: dict[str, Any]
+    iteration: int = 0  # loop iteration index (0 outside loops); drives control.counter etc.
     _stages: list[tuple[str, float]] = field(default_factory=list)
 
     def report(self, stage: str, frac: float) -> None:

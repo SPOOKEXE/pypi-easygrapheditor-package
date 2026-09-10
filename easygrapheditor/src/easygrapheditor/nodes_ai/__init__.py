@@ -33,7 +33,7 @@ TRACE = "data.TRACE"
     inputs=[],
     outputs=[PortDef("text", "Text", TEXT, "out")],
 )
-def prompt_node(text: str = Param("Explain domain warping for terrain generation.", kind="multiline", label="Text")) -> str:  # type: ignore[no-untyped-def]
+def prompt_node(text: str = Param("Explain domain warping for terrain generation.", kind="textarea", label="Text")) -> str:  # type: ignore[no-untyped-def]
     return str(text)
 
 
@@ -49,9 +49,9 @@ def prompt_node(text: str = Param("Explain domain warping for terrain generation
 async def llm_generate(
     ctx: ExecCtx,
     prompt: str,
-    system: str = Param("You are a concise data generator.", kind="multiline", label="System"),  # type: ignore[no-untyped-def]
-    model: str = Param("mock", kind="dropdown", label="Backend", options=["mock", "auto", "openai"]),  # type: ignore[no-untyped-def]
-    delay: float = Param(0.05, kind="number", label="Mock delay (s)"),  # type: ignore[no-untyped-def]
+    system: str = Param("You are a concise data generator.", kind="textarea", label="System"),  # type: ignore[no-untyped-def]
+    model: str = Param("mock", kind="select", label="Backend", options=["mock", "auto", "openai"]),  # type: ignore[no-untyped-def]
+    delay: float = Param(0.05, kind="float_slider", label="Mock delay (s)", min=0, max=1, step=0.01),  # type: ignore[no-untyped-def]
 ) -> dict[str, Any]:
     backend = get_backend(str(model), delay=float(delay))
     ctx.report("planning", 0.2)
@@ -85,10 +85,10 @@ async def llm_generate(
 async def backforth_loop(
     ctx: ExecCtx,
     prompt: str,
-    rounds: int = Param(2, kind="int", label="Rounds", min=1, max=5, step=1),  # type: ignore[no-untyped-def]
-    system: str = Param("You are a generator + critic pair.", kind="multiline", label="System"),  # type: ignore[no-untyped-def]
-    model: str = Param("mock", kind="dropdown", label="Backend", options=["mock", "auto", "openai"]),  # type: ignore[no-untyped-def]
-    delay: float = Param(0.05, kind="number", label="Mock delay (s)"),  # type: ignore[no-untyped-def]
+    rounds: int = Param(2, kind="step_slider", label="Rounds", min=1, max=5, step=1),  # type: ignore[no-untyped-def]
+    system: str = Param("You are a generator + critic pair.", kind="textarea", label="System"),  # type: ignore[no-untyped-def]
+    model: str = Param("mock", kind="select", label="Backend", options=["mock", "auto", "openai"]),  # type: ignore[no-untyped-def]
+    delay: float = Param(0.05, kind="float_slider", label="Mock delay (s)", min=0, max=1, step=0.01),  # type: ignore[no-untyped-def]
 ) -> dict[str, Any]:
     backend = get_backend(str(model), delay=float(delay))
     n = max(1, min(int(rounds), 5))

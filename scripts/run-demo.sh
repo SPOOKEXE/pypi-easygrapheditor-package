@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run an easygrapheditor demo headless or inside a UI backend.
 #
-#   ./scripts/run-demo.sh --demo minimal|noiseterrain|stagedarith|normterrain|aitrace|terrain
+#   ./scripts/run-demo.sh --demo minimal|noiseterrain|stagedarith|normterrain|aitrace|terrain|loop|subflow
 #   ./scripts/run-demo.sh --demo noiseterrain --ui pygame|gradio|streamlit|headless
 #   ./scripts/run-demo.sh --list
 #   ./scripts/run-demo.sh --help
@@ -20,7 +20,10 @@ declare -A DEMOS=(
   [normterrain]="normterrain_demo.py|Normalized + terraced terrain variant"
   [aitrace]="ai_trace_factory_demo.py|Mock-LLM back-and-forth trace factory"
   [terrain]="terrain_demo.py|Node library listing (stub)"
+  [loop]="loop_demo.py|Counter + accumulate until the end condition finishes"
+  [subflow]="subflow_demo.py|Combine nodes into one, run, expand back"
 )
+NAMES="minimal noiseterrain stagedarith normterrain aitrace terrain loop subflow"
 UIS="headless pygame gradio streamlit"
 
 DEMO=""
@@ -35,7 +38,7 @@ Usage: run-demo.sh --demo NAME [--ui BACKEND] [-- extra args]
 
 Demos:
 EOF
-  for name in minimal noiseterrain stagedarith normterrain aitrace terrain; do
+  for name in $NAMES; do
     echo "  $name — ${DEMOS[$name]#*|}"
   done
   cat <<EOF
@@ -68,7 +71,7 @@ done
 
 if [[ "$HELP" -eq 1 ]]; then usage; exit 0; fi
 if [[ "$LIST" -eq 1 ]]; then
-  for name in minimal noiseterrain stagedarith normterrain aitrace terrain; do
+  for name in $NAMES; do
     echo "$name ${DEMOS[$name]#*|}"
   done
   exit 0

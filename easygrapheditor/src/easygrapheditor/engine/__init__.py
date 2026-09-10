@@ -2,9 +2,33 @@
 
 from .cache import Cache, content_hash
 from .execute import Executor, NodeReport, RunReport
-from .graph import Graph, Link, NodeInstance, ValidationError
-from .nodes import ExecCtx, NodeDef, Param, ParamDef, PortDef, get_node, list_nodes, node
+from .graph import SUBWORKFLOW_TYPE_ID, Graph, Link, NodeInstance, ValidationError
+from .loops import (
+    DEFAULT_MAX_ITERATIONS,
+    END_CONDITION_TYPE_ID,
+    LoopDef,
+    loop_body_order,
+    validate_loops,
+)
+from .nodes import (
+    ExecCtx,
+    NodeDef,
+    Param,
+    ParamDef,
+    PortDef,
+    canonical_kind,
+    get_node,
+    list_nodes,
+    node,
+)
 from .persist import load_graph, save_graph
+from .subworkflows import (
+    DEFAULT_MAX_RECURSIONS,
+    build_inner_graph,
+    combine_nodes,
+    describe_subworkflow,
+    expand_subworkflow_node,
+)
 from .types import (
     ANY,
     DataType,
@@ -18,9 +42,44 @@ from .types import (
 )
 
 __all__ = [
-    "ANY", "Cache", "DataType", "ExecCtx", "Executor", "Field", "Graph", "Image",
-    "Link", "NodeDef", "NodeInstance", "NodeReport", "Number", "Param", "ParamDef",
-    "PortDef", "RunReport", "ValidationError", "can_connect", "content_hash",
-    "get_node", "get_type", "list_nodes", "list_types", "load_graph", "node",
-    "register_type", "save_graph",
+    "ANY",
+    "DEFAULT_MAX_ITERATIONS",
+    "DEFAULT_MAX_RECURSIONS",
+    "END_CONDITION_TYPE_ID",
+    "SUBWORKFLOW_TYPE_ID",
+    "Cache",
+    "DataType",
+    "ExecCtx",
+    "Executor",
+    "Field",
+    "Graph",
+    "Image",
+    "Link",
+    "LoopDef",
+    "NodeDef",
+    "NodeInstance",
+    "NodeReport",
+    "Number",
+    "Param",
+    "ParamDef",
+    "PortDef",
+    "RunReport",
+    "ValidationError",
+    "build_inner_graph",
+    "can_connect",
+    "canonical_kind",
+    "combine_nodes",
+    "content_hash",
+    "describe_subworkflow",
+    "expand_subworkflow_node",
+    "get_node",
+    "get_type",
+    "list_nodes",
+    "list_types",
+    "load_graph",
+    "loop_body_order",
+    "node",
+    "register_type",
+    "save_graph",
+    "validate_loops",
 ]

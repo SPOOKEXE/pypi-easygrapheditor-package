@@ -7,6 +7,7 @@ from pathlib import Path
 from . import nodes_ai as _ai  # noqa: F401 - registers AI trace nodes
 from . import nodes_builtin as _builtin  # noqa: F401 - registers builtins
 from . import nodes_comfy_demo as _comfy  # noqa: F401 - registers mocks
+from . import nodes_control as _control  # noqa: F401 - registers loop primitives
 from .engine import (
     Cache,
     Executor,

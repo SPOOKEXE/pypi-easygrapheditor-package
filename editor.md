@@ -187,18 +187,31 @@ class NodeDef:
 - Async contract: `async def fn(ctx: ExecCtx, ...)`: `ctx.report(stage: str, frac: float)` drives `Staged Task` progress UI.
 
 ### 4.3 Graph model
-- `Graph { nodes: dict[id, NodeInstance], links: list[Link{from_node,from_port,to_node,to_port}] }`.
+- `Graph { nodes, links, loops }`.
 - `NodeInstance { id, type_id, params: dict, pos: (x,y), collapsed: bool }`.
-- `validate()`: unknown type, missing required input, type mismatch, cycle detection. Returns structured errors for Errors tab.
-- Serialize: `to_json() -> {version, nodes[{id,type,pos,params}], links[...]}`. Must round-trip canvas positions. Import best-effort subset of ComfyUI `workflow_api.json`.
+- `LoopDef { name, body: [node ids], condition: node id, max_iterations = 1000 }` (see §4.6).
+- Subworkflow nodes (`core.subworkflow`) carry `{label, nodes, links, inputs, outputs}` in params (see §4.7).
+- `validate()`: unknown type, missing required input, type mismatch, cycle detection (**except** `control.accumulate.next` feedback links, which carry previous-iteration values), loop rules, recursive subworkflow checks. Returns structured errors for Errors tab.
+- Serialize: `to_json() -> {version, nodes[{id,type,pos,params}], links[...], loops[...]}`. Must round-trip canvas positions. Import best-effort subset of ComfyUI `workflow_api.json`.
 
 ### 4.4 Executor
-- `Executor(graph, cache, max_concurrency=4)`.
+- `Executor(graph, cache, max_concurrency=4, max_recursions=1000)`.
 - `async run(dirty_only=True, cancel_token) -> RunReport { per_node: {status, ms, cache_hit, error} }`.
 - Dirty propagation: param change or upstream change marks downstream dirty.
-- Hash: `sha1(type_id + canonical params + sorted input hashes)`.
+- Hash: `sha1(type_id + canonical params + sorted input hashes)`. Loop-body passes bypass the cache (iteration-scoped values); subworkflow inners share it (pure).
+- Loops run as supernodes in condensation order; recursion depth counts subworkflow levels and errors past `max_recursions`.
 - Events emitted for UI: `node_started/stage/node_done/cache_hit/run_done/error`.
 - Sync wrapper `run_blocking()` for Streamlit/simple scripts.
+
+### 4.6 Loops
+- Primitives (`Control` category): `control.counter` (iteration index), `control.accumulate` (loop-carried state: emits previous `next`, starts at `initial`), `control.end_condition` (EndConditionNode → `done` 1/0 via `counter` | `threshold` | `truthy` modes).
+- `Graph.add_loop(name, body, condition, max_iterations=1000)`; bodies stay acyclic — feedback flows only through `accumulate.next`, which validation/ordering ignore.
+- Cap exhaustion is a run error naming the loop and cap. Loop reports merge per-iteration stages/ms under the body node ids.
+
+### 4.7 Subworkflows (combine-into-one)
+- `combine_nodes(graph, ids, label)` folds a selection into one `core.subworkflow` node: internal links move inside (positions relativized), boundary links become mapped input/output ports, outside links rewire through it. `expand_subworkflow_node` inlines back (id-clash safe).
+- Inner graphs validate + execute recursively (nesting allowed); `describe_subworkflow` feeds hover/inspector (`label`, port maps, inner titles).
+- UI must badge subflow nodes (`[sub:N]`), list loop membership (`[loop:name]`), and offer inline Expand.
 
 ### 4.5 Built-in data payloads (v1)
 - `Number = float`, `Field = np.ndarray[float32, HxW] 0..1 square`, `Image = np.ndarray[uint8, HxWx3] square`. Fixed `64` default res for demo, configurable via param (`Resolution 64`).
@@ -209,7 +222,8 @@ class NodeDef:
 All backends implement `EditorBackend` operating on a shared `EditorState { graph, selection, viewport, run_report, errors }`.
 
 - Canvas interactions: drag node, drag port-to-port (highlight legal targets, reject illegal with toast), marquee select, delete, duplicate, `group/ungroup`, `collapse/expand`, copy/paste JSON, `snap` toggle.
-- Widgets map 1:1 to `ParamDef.kind`: slider→slider, dropdown→dropdown, toggle→checkbox/switch, multiline→textarea (prompt), file→uploader, seed→number + randomize button.
+- Widgets map from canonical `ParamDef.kind` (`canonical_kind()`; legacy `slider/toggle/dropdown/multiline` alias to `float_slider/checkbox/select/textarea`): `float_slider`→continuous decimal slider, `step_slider`→stepped slider, `int`/`number`/`seed`→numerical inputs, `text`→input box, `textarea`→multi-line box, `select`→dropdown, `checkbox`→switch, `file`→uploader. Shared spec/cast/nudge helpers live in `ui/widgets.py`.
+- Manipulation per backend: Gradio — per-node inspector accordions with kind-mapped inputs + Apply, Loops max_iterations editors, Expand buttons; Streamlit — per-node expanders writing straight back to params; pygame — click-select, `[`/`]` tweak numeric/slider (Shift = x10), `T` toggle, `D` cycle dropdown, `E` expand subworkflow, `R` re-run.
 - Node card must show: status dot/badge, timing (`2003 ms`), thumbnails.
 - Right panel tabs `Library|Inspector|Types` + left rail (`Nodes`, `Console/Errors`, `Settings`) on desktop backends; collapsible drawer on Gradio/Streamlit.
 - Toolbar + status bar as §2.7. `Run` triggers `executor.run()`. `live` toggles auto-run on debounce (500ms). `forget cache` clears cache + marks all dirty.

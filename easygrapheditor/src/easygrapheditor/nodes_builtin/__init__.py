@@ -25,8 +25,8 @@ def number(value: float = Param(1.0, kind="number", label="Value")) -> float:  #
 def arithmetic(
     a: float,
     b: float,
-    operation: str = Param("add", kind="dropdown", label="Operation", options=["add", "subtract"]),  # type: ignore[no-untyped-def]
-    absolute: bool = Param(False, kind="toggle", label="Absolute"),  # type: ignore[no-untyped-def]
+    operation: str = Param("add", kind="select", label="Operation", options=["add", "subtract"]),  # type: ignore[no-untyped-def]
+    absolute: bool = Param(False, kind="checkbox", label="Absolute"),  # type: ignore[no-untyped-def]
 ) -> float:
     res = a + b if operation == "add" else a - b
     return abs(res) if absolute else res
@@ -95,11 +95,11 @@ def _sample_bilinear(field: np.ndarray, ys: np.ndarray, xs: np.ndarray) -> np.nd
 
 @node(category="Generate", color="blue", description="Value noise field 0..1.")
 def noise(
-    resolution: int = Param(64, kind="int", label="Resolution", min=8, max=256, step=8),  # type: ignore[no-untyped-def]
-    frequency: float = Param(4.0, kind="slider", label="Frequency", min=1, max=16, step=0.5),  # type: ignore[no-untyped-def]
+    resolution: int = Param(64, kind="step_slider", label="Resolution", min=8, max=256, step=8),  # type: ignore[no-untyped-def]
+    frequency: float = Param(4.0, kind="float_slider", label="Frequency", min=1, max=16, step=0.5),  # type: ignore[no-untyped-def]
     seed: float = Param(7.0, kind="seed", label="Seed"),  # type: ignore[no-untyped-def]
-    octaves: int = Param(4, kind="int", label="Octaves", min=1, max=8, step=1),  # type: ignore[no-untyped-def]
-    gain: float = Param(0.5, kind="slider", label="Gain", min=0.1, max=1.0, step=0.05),  # type: ignore[no-untyped-def]
+    octaves: int = Param(4, kind="step_slider", label="Octaves", min=1, max=8, step=1),  # type: ignore[no-untyped-def]
+    gain: float = Param(0.5, kind="float_slider", label="Gain", min=0.1, max=1.0, step=0.05),  # type: ignore[no-untyped-def]
 ) -> Field:
     res = int(resolution)
     return Field(data=_value_noise(res, float(frequency), float(seed), int(octaves), float(gain), False))
@@ -107,11 +107,11 @@ def noise(
 
 @node(category="Generate", color="blue", description="Ridged value noise field 0..1.")
 def ridged(
-    resolution: int = Param(64, kind="int", label="Resolution", min=8, max=256, step=8),  # type: ignore[no-untyped-def]
-    frequency: float = Param(4.0, kind="slider", label="Frequency", min=1, max=16, step=0.5),  # type: ignore[no-untyped-def]
+    resolution: int = Param(64, kind="step_slider", label="Resolution", min=8, max=256, step=8),  # type: ignore[no-untyped-def]
+    frequency: float = Param(4.0, kind="float_slider", label="Frequency", min=1, max=16, step=0.5),  # type: ignore[no-untyped-def]
     seed: float = Param(7.0, kind="seed", label="Seed"),  # type: ignore[no-untyped-def]
-    octaves: int = Param(5, kind="int", label="Octaves", min=1, max=8, step=1),  # type: ignore[no-untyped-def]
-    gain: float = Param(0.5, kind="slider", label="Gain", min=0.1, max=1.0, step=0.05),  # type: ignore[no-untyped-def]
+    octaves: int = Param(5, kind="step_slider", label="Octaves", min=1, max=8, step=1),  # type: ignore[no-untyped-def]
+    gain: float = Param(0.5, kind="float_slider", label="Gain", min=0.1, max=1.0, step=0.05),  # type: ignore[no-untyped-def]
 ) -> Field:
     res = int(resolution)
     return Field(data=_value_noise(res, float(frequency), float(seed), int(octaves), float(gain), True))
@@ -126,7 +126,7 @@ def ridged(
     inputs=[PortDef("field_in", "In", "data.FIELD", "in"), PortDef("warp_by", "By", "data.FIELD", "in")],
     outputs=[PortDef("out", "Out", "data.FIELD", "out")],
 )
-def domain_warp(field_in: Field, warp_by: Field, amount: float = Param(12.0, kind="slider", label="Amount", min=0, max=32, step=0.5)) -> Field:  # type: ignore[no-untyped-def]
+def domain_warp(field_in: Field, warp_by: Field, amount: float = Param(12.0, kind="float_slider", label="Amount", min=0, max=32, step=0.5)) -> Field:  # type: ignore[no-untyped-def]
     h, w = field_in.data.shape
     # Second field drives an angle + magnitude warp; centred so mean-zero warps less.
     yy, xx = np.mgrid[0:h, 0:w]
@@ -149,8 +149,8 @@ def domain_warp(field_in: Field, warp_by: Field, amount: float = Param(12.0, kin
 def combine(
     a: Field,
     b: Field,
-    amount: float = Param(0.5, kind="slider", label="Amount", min=0, max=1, step=0.05),  # type: ignore[no-untyped-def]
-    mode: str = Param("maximum", kind="dropdown", label="Mode", options=["maximum", "add", "multiply", "min"]),  # type: ignore[no-untyped-def]
+    amount: float = Param(0.5, kind="float_slider", label="Amount", min=0, max=1, step=0.05),  # type: ignore[no-untyped-def]
+    mode: str = Param("maximum", kind="select", label="Mode", options=["maximum", "add", "multiply", "min"]),  # type: ignore[no-untyped-def]
 ) -> Field:
     t = float(amount)
     if mode == "add":
@@ -175,9 +175,9 @@ def combine(
 )
 def erode(
     field_in: Field,
-    thermal_passes: float = Param(30.0, kind="number", label="Thermal passes"),  # type: ignore[no-untyped-def]
-    talus: float = Param(0.01, kind="number", label="Talus"),  # type: ignore[no-untyped-def]
-    spin_passes: float = Param(20.0, kind="number", label="Spin passes"),  # type: ignore[no-untyped-def]
+    thermal_passes: float = Param(30.0, kind="step_slider", label="Thermal passes", min=0, max=200, step=1),  # type: ignore[no-untyped-def]
+    talus: float = Param(0.01, kind="float_slider", label="Talus", min=0, max=0.2, step=0.005),  # type: ignore[no-untyped-def]
+    spin_passes: float = Param(20.0, kind="step_slider", label="Spin passes", min=0, max=100, step=1),  # type: ignore[no-untyped-def]
 ) -> Field:
     h = field_in.data.astype(np.float32).copy()
     passes = int(min(max(float(thermal_passes), 0), 200))
@@ -238,9 +238,9 @@ _ALPINE = np.array(
 )
 def colourise(
     field_in: Field,
-    palette: str = Param("alpine", kind="dropdown", label="Palette", options=["alpine"]),  # type: ignore[no-untyped-def]
-    sea_level: float = Param(0.32, kind="slider", label="Sea level", min=0, max=1, step=0.01),  # type: ignore[no-untyped-def]
-    relief: bool = Param(False, kind="toggle", label="Relief"),  # type: ignore[no-untyped-def]
+    palette: str = Param("alpine", kind="select", label="Palette", options=["alpine"]),  # type: ignore[no-untyped-def]
+    sea_level: float = Param(0.32, kind="float_slider", label="Sea level", min=0, max=1, step=0.01),  # type: ignore[no-untyped-def]
+    relief: bool = Param(False, kind="checkbox", label="Relief"),  # type: ignore[no-untyped-def]
 ) -> Image:
     _ = palette
     f = np.clip(field_in.data, 0, 1)
@@ -288,7 +288,7 @@ def readout(value_in) -> float:  # type: ignore[no-untyped-def]
     inputs=[PortDef("field_in", "In", "data.FIELD", "in")],
     outputs=[PortDef("out", "Out", "data.FIELD", "out")],
 )
-def terrace(field_in: Field, steps: float = Param(5.0, kind="number", label="Steps")) -> Field:  # type: ignore[no-untyped-def]
+def terrace(field_in: Field, steps: float = Param(5.0, kind="step_slider", label="Steps", min=2, max=16, step=1)) -> Field:  # type: ignore[no-untyped-def]
     s = max(2, int(float(steps)))
     return Field(data=(np.floor(field_in.data * s) / (s - 1)).clip(0, 1).astype(np.float32))
 
@@ -302,7 +302,7 @@ def terrace(field_in: Field, steps: float = Param(5.0, kind="number", label="Ste
     inputs=[PortDef("field_in", "In", "data.FIELD", "in")],
     outputs=[PortDef("out", "Out", "data.FIELD", "out")],
 )
-def threshold(field_in: Field, cutoff: float = Param(0.5, kind="slider", label="Cutoff", min=0, max=1, step=0.01)) -> Field:  # type: ignore[no-untyped-def]
+def threshold(field_in: Field, cutoff: float = Param(0.5, kind="float_slider", label="Cutoff", min=0, max=1, step=0.01)) -> Field:  # type: ignore[no-untyped-def]
     return Field(data=(field_in.data >= float(cutoff)).astype(np.float32))
 
 
@@ -315,5 +315,5 @@ def threshold(field_in: Field, cutoff: float = Param(0.5, kind="slider", label="
     inputs=[],
     outputs=[],
 )
-def note(text: str = Param("", kind="multiline", label="Text")) -> None:  # type: ignore[no-untyped-def]
+def note(text: str = Param("", kind="textarea", label="Text")) -> None:  # type: ignore[no-untyped-def]
     return None

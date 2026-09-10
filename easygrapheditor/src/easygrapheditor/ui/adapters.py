@@ -21,10 +21,17 @@ import numpy as np
 
 from ..engine.cache import Cache
 from ..engine.execute import Executor, RunReport
-from ..engine.graph import Graph
-from ..engine.nodes import get_node
+from ..engine.graph import SUBWORKFLOW_TYPE_ID, Graph
+from ..engine.nodes import canonical_kind, get_node
 from ..engine.types import Field, Image
 from .canvas import EditorState
+from .inspector import inspect_node
+from .widgets import (
+    adjust_param_value,
+    cast_param_value,
+    gradio_param_component,
+    streamlit_param_widget,
+)
 
 try:
     from PIL import Image as _PILImage
@@ -67,6 +74,7 @@ class AdapterOptions:
     title: str = "Graph Editor"
     show_images: bool = True
     show_table: bool = True
+    inspector: bool = True  # param editors / loop controls / expand buttons
     run_label: str = "▶ Run"
 
 
@@ -101,11 +109,19 @@ class GraphAdapter:
         return self.report.ok() if self.report is not None else False
 
     # -- inspection --------------------------------------------------
+    def loop_of(self, nid: str) -> str:
+        """Loop name containing ``nid`` ("" when in no loop)."""
+        for loop in self.state.graph.loops:
+            if nid in loop.body:
+                return loop.name
+        return ""
+
     def node_rows(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for nid, inst in self.state.graph.nodes.items():
             ndef = get_node(inst.type_id)
             rep = self.report.per_node.get(nid) if self.report else None
+            subflow = len(inst.params.get("nodes", [])) if inst.type_id == SUBWORKFLOW_TYPE_ID else 0
             rows.append(
                 {
                     "node": nid,
@@ -115,9 +131,41 @@ class GraphAdapter:
                     "ms": round(rep.ms, 1) if rep else 0.0,
                     "cached": bool(rep and rep.cache_hit),
                     "error": rep.error if rep and rep.error else "",
+                    "loop": self.loop_of(nid),
+                    "subflow": subflow,
                 }
             )
         return rows
+
+    def describe_node(self, nid: str) -> dict[str, Any]:
+        """Hover/inspector detail: definition + live params + loop/subflow context."""
+        inst = self.state.graph.nodes.get(nid)
+        if inst is None:
+            return {"error": f"Unknown node: {nid}"}
+        detail = inspect_node(inst.type_id)
+        ndef = get_node(inst.type_id)
+        params = []
+        for pdef in ndef.params if ndef else []:
+            params.append(
+                {"key": pdef.key, "label": pdef.label or pdef.key, "kind": pdef.kind,
+                 "value": inst.params.get(pdef.key, pdef.default)}
+            )
+        detail["params"] = params
+        detail["loop"] = self.loop_of(nid)
+        detail["instance_params"] = dict(inst.params)
+        if inst.type_id == SUBWORKFLOW_TYPE_ID:
+            from ..engine.subworkflows import describe_subworkflow
+
+            detail["subflow"] = describe_subworkflow(inst)
+        return detail
+
+    def expand_subworkflow(self, nid: str) -> list[str]:
+        """Inline a subworkflow node; returns restored ids (re-runs nothing)."""
+        from ..engine.subworkflows import expand_subworkflow_node
+
+        restored = expand_subworkflow_node(self.state.graph, nid)
+        self.state.selection = [r for r in restored[:1]]
+        return restored
 
     def output_images(self) -> list[tuple[str, Any]]:
         """All Field/Image node outputs as (label, PIL image)."""
@@ -134,7 +182,9 @@ class GraphAdapter:
 
     def summarize(self, title: str = "Graph Editor") -> str:
         g = self.state.graph
-        lines = [f"## {title}", f"{len(g.nodes)} nodes · {len(g.links)} links"]
+        lines = [f"## {title}", f"{len(g.nodes)} nodes · {len(g.links)} links · {len(g.loops)} loops"]
+        for loop in g.loops:
+            lines.append(f"↻ loop `{loop.name}`: {len(loop.body)} nodes · max_iterations={loop.max_iterations}")
         if self.report is None:
             lines.append("_Not run yet — press Run._")
             return "\n\n".join(lines)
@@ -143,8 +193,13 @@ class GraphAdapter:
         for row in self.node_rows():
             flag = "✓" if row["status"] in ("ok", "cached") else ("✗" if row["status"] == "error" else "·")
             extra = " (cached)" if row["cached"] else ""
+            badges = ""
+            if row["loop"]:
+                badges += f" [loop:{row['loop']}]"
+            if row["subflow"]:
+                badges += f" [sub:{row['subflow']}]"
             err = f" — {row['error']}" if row["error"] else ""
-            lines.append(f"- {flag} `{row['title']}` ({row['node']}) — {row['status']}{extra} · {row['ms']} ms{err}")
+            lines.append(f"- {flag} `{row['title']}` ({row['node']}) — {row['status']}{extra}{badges} · {row['ms']} ms{err}")
         return "\n".join(lines)
 
 
@@ -187,23 +242,64 @@ def gradio_register_grapheditor(host: Any, source: GraphAdapter | EditorState | 
     o = AdapterOptions(**{k: v for k, v in opts.items() if k in AdapterOptions.__dataclass_fields__})
     adapter = GraphAdapter.from_any(source)
 
+    def _refresh() -> tuple[str, list, list]:
+        return (
+            adapter.summarize(o.title),
+            [img for _, img in adapter.output_images()],
+            adapter.node_rows(),
+        )
+
     with host:
         gr.Markdown(f"## {o.title}")
         summary = gr.Markdown(adapter.summarize(o.title))
         gallery = gr.Gallery(value=[img for _, img in adapter.output_images()], label="Outputs", visible=o.show_images)
         table = gr.JSON(value=adapter.node_rows(), label="Nodes", visible=o.show_table)
+        notice = gr.Markdown("", visible=False)
         run_btn = gr.Button(o.run_label)
 
         def _on_run() -> tuple[str, list, list]:
             adapter.run()
-            return (
-                adapter.summarize(o.title),
-                [img for _, img in adapter.output_images()],
-                adapter.node_rows(),
-            )
+            return _refresh()
 
         run_btn.click(_on_run, outputs=[summary, gallery, table])
-    return {"summary": summary, "gallery": gallery, "table": table, "run": run_btn, "adapter": adapter}
+
+        if o.inspector:
+            with gr.Accordion("Inspector: node params (Apply writes back, then Run)", open=False):
+                for nid, inst in list(adapter.state.graph.nodes.items()):
+                    ndef = get_node(inst.type_id)
+                    if ndef is None:
+                        continue
+                    with gr.Accordion(f"{ndef.title} (`{nid}`)", open=False):
+                        comps = [gradio_param_component(gr, p, inst.params.get(p.key, p.default)) for p in ndef.params]
+
+                        def _on_apply(*values: Any, _nid: str = nid, _ndef: Any = ndef) -> tuple[str, list, list]:
+                            for pdef, raw in zip(_ndef.params, values):
+                                adapter.state.graph.nodes[_nid].params[pdef.key] = cast_param_value(pdef, raw)
+                            return _refresh()
+
+                        gr.Button("Apply params", size="sm").click(_on_apply, inputs=comps, outputs=[summary, gallery, table])
+                        if inst.type_id == SUBWORKFLOW_TYPE_ID:
+                            expand_btn = gr.Button("Expand subworkflow inline", size="sm")
+
+                            def _on_expand(_x: Any = None, _nid: str = nid) -> tuple[str, list, list, Any]:
+                                restored = adapter.expand_subworkflow(_nid)
+                                s, g, t = _refresh()
+                                note = f"Expanded into {len(restored)} nodes — reload the UI to refresh the inspector."
+                                return s, g, t, gr.Markdown(note, visible=True)
+
+                            expand_btn.click(_on_expand, outputs=[summary, gallery, table, notice])
+
+            if adapter.state.graph.loops:
+                with gr.Accordion("Loops: max_iterations (Apply writes back)", open=False):
+                    for i, loop in enumerate(adapter.state.graph.loops):
+                        max_box = gr.Number(value=loop.max_iterations, label=f"{loop.name} · max_iterations", precision=0)
+
+                        def _on_loop_apply(v: float, _i: int = i) -> tuple[str, list, list]:
+                            adapter.state.graph.loops[_i].max_iterations = max(1, int(v))
+                            return _refresh()
+
+                        gr.Button(f"Apply {loop.name}", size="sm").click(_on_loop_apply, inputs=[max_box], outputs=[summary, gallery, table])
+    return {"summary": summary, "gallery": gallery, "table": table, "run": run_btn, "notice": notice, "adapter": adapter}
 
 
 # ----------------------------------------------- streamlit (host-provided)
@@ -233,6 +329,37 @@ def streamlit_register_grapheditor(
     adapter = GraphAdapter.from_any(source)
     if container.button(o.run_label):
         adapter.run()
+    if o.inspector:
+        with container.expander("Inspector: node params", expanded=False):
+            for nid, inst in list(adapter.state.graph.nodes.items()):
+                ndef = get_node(inst.type_id)
+                if ndef is None:
+                    continue
+                detail = adapter.describe_node(nid)
+                with container.expander(f"{ndef.title} (`{nid}`)", expanded=False):
+                    if detail.get("loop"):
+                        container.markdown(f"_Loop: `{detail['loop']}`_")
+                    if detail.get("subflow"):
+                        container.markdown(f"_Subworkflow: {detail['subflow']['nodes']} nodes — {', '.join(detail['subflow']['titles'][:8])}_")
+                        if container.button("Expand subworkflow inline", key=f"ege:expand:{nid}"):
+                            adapter.expand_subworkflow(nid)
+                            try:
+                                import streamlit as st
+
+                                st.rerun()
+                            except Exception:  # noqa: BLE001 - headless/fake containers have no rerun
+                                adapter.state.errors.append(f"expanded {nid}: reload to refresh inspector")
+                    for pdef in ndef.params:
+                        key = f"ege:{nid}:{pdef.key}"
+                        current = inst.params.get(pdef.key, pdef.default)
+                        new_val = streamlit_param_widget(container, pdef, current, key)
+                        inst.params[pdef.key] = cast_param_value(pdef, new_val)
+        if adapter.state.graph.loops:
+            with container.expander("Loops: max_iterations", expanded=False):
+                for loop in adapter.state.graph.loops:
+                    loop.max_iterations = max(
+                        1, int(container.number_input(f"{loop.name} · max_iterations", value=int(loop.max_iterations), step=1, key=f"ege:loop:{loop.name}"))
+                    )
     container.markdown(adapter.summarize(o.title))
     if o.show_images:
         for label, img in adapter.output_images():
@@ -295,6 +422,101 @@ def _render_text(kind_font: tuple[str, Any], text: str, color: tuple[int, int, i
     return surf
 
 
+def compute_boxes(graph: Graph, area: Any, style: PygameStyle) -> dict[str, Any]:
+    """Node id -> pygame.Rect. Shared by drawing and click hit-testing."""
+    import pygame
+
+    pos, _depth = layout_graph(graph)
+    max_col = max((int(x) for x, _ in pos.values()), default=0)
+    max_row = max((int(y) for _, y in pos.values()), default=0)
+    grid_x0, grid_y0 = area.x + 16, area.y + 36
+    avail_w = max(area.w - 32, style.node_w)
+    avail_h = max(area.h - 60, style.node_h)
+    step_x = min(style.node_w + style.col_gap, avail_w / max(max_col + 1, 1))
+    step_y = min(style.node_h + style.row_gap, avail_h / max(max_row + 1, 1))
+    return {
+        nid: pygame.Rect(int(grid_x0 + x * step_x), int(grid_y0 + y * step_y), style.node_w, style.node_h)
+        for nid, (x, y) in pos.items()
+    }
+
+
+def pygame_node_at(graph: Graph, boxes: dict[str, Any], point: tuple[int, int]) -> str | None:
+    """Node id under ``point`` (insertion order wins on overlap)."""
+    for nid in graph.nodes:
+        if nid in boxes and boxes[nid].collidepoint(point):
+            return nid
+    return None
+
+
+def pygame_adjust_selected(
+    adapter: GraphAdapter,
+    direction: int,
+    factor: float = 1.0,
+    kinds: tuple[str, ...] = ("float_slider", "slider", "step_slider", "int", "number", "seed", "select", "dropdown"),
+) -> str | None:
+    """Nudge the first adjustable param of the selected node. Returns a log line."""
+    if not adapter.state.selection:
+        return None
+    nid = adapter.state.selection[0]
+    inst = adapter.state.graph.nodes.get(nid)
+    ndef = get_node(inst.type_id) if inst else None
+    if inst is None or ndef is None:
+        return None
+    for pdef in ndef.params:
+        if canonical_kind(pdef.kind) not in kinds:
+            continue
+        new_val = adjust_param_value(pdef, inst.params.get(pdef.key, pdef.default), direction, factor)
+        if new_val != inst.params.get(pdef.key, pdef.default):
+            inst.params[pdef.key] = new_val
+            return f"{nid}.{pdef.key} -> {new_val}"
+    return None
+
+
+def pygame_draw_inspector(screen: Any, adapter: GraphAdapter, rect: Any, style: PygameStyle | None = None) -> Any:
+    """Side panel: selected node params (label=value [kind]), loop + subflow detail."""
+    import pygame
+
+    st = style or PygameStyle()
+    font = _make_font(14)
+    small = _make_font(12)
+    screen.fill(st.bg, rect)
+    pygame.draw.rect(screen, st.panel, rect, border_radius=8)
+    x, y = rect.x + 10, rect.y + 10
+
+    def line(text: str, f: Any = small, color: Any = None) -> None:
+        nonlocal y
+        if y > rect.bottom - 20:
+            return
+        screen.blit(_render_text(f, text[:44], color or st.text), (x, y))
+        y += 18
+
+    line("Inspector", font)
+    sel = adapter.state.selection[:1]
+    if not sel:
+        line("click a node to select", small, st.dim)
+    else:
+        detail = adapter.describe_node(sel[0])
+        if "error" in detail:
+            line(detail["error"], small, st.err)
+            return rect
+        line(f"{detail.get('title', sel[0])}", font)
+        if detail.get("loop"):
+            line(f"[loop:{detail['loop']}]", small, st.edge)
+        for p in detail.get("params", [])[:10]:
+            line(f"{p['label']}={p['value']} [{p['kind']}]", small, st.dim)
+        sub = detail.get("subflow")
+        if sub:
+            line(f"[sub:{sub['nodes']}] {sub['label']}", small, st.edge)
+            for title in sub["titles"][:6]:
+                line(f"  - {title}", small, st.dim)
+    if adapter.state.graph.loops:
+        line("Loops:", font)
+        for loop in adapter.state.graph.loops:
+            line(f"~ {loop.name}: max={loop.max_iterations}", small, st.dim)
+    line("[ ] tweak · T toggle · D cycle · E expand · R run", small, st.dim)
+    return rect
+
+
 def pygame_register_grapheditor(
     screen: Any,
     source: GraphAdapter | EditorState | Graph,
@@ -343,6 +565,7 @@ def pygame_register_grapheditor(
             a, b = boxes[link.from_node], boxes[link.to_node]
             pygame.draw.line(screen, st.edge, a.midright, b.midleft, 2)
 
+    selected = set(adapter.state.selection)
     for nid, inst in graph.nodes.items():
         ndef = get_node(inst.type_id)
         rep = adapter.report.per_node.get(nid) if adapter.report else None
@@ -350,11 +573,19 @@ def pygame_register_grapheditor(
         r = boxes[nid]
         pygame.draw.rect(screen, (45, 50, 62), r, border_radius=6)
         pygame.draw.rect(screen, color, r, 2, border_radius=6)
-        screen.blit(_render_text(font, (ndef.title if ndef else inst.type_id)[:24], st.text), (r.x + 8, r.y + 6))
+        if nid in selected:
+            pygame.draw.rect(screen, (240, 240, 245), r, 4, border_radius=6)
+        badges = ""
+        loop = adapter.loop_of(nid)
+        if loop:
+            badges += f" [loop:{loop}]"
+        if inst.type_id == SUBWORKFLOW_TYPE_ID:
+            badges += f" [sub:{len(inst.params.get('nodes', []))}]"
+        screen.blit(_render_text(font, (ndef.title if ndef else inst.type_id)[:22], st.text), (r.x + 8, r.y + 6))
         sub = f"{rep.status} {rep.ms:.0f}ms" if rep else "not run"
-        screen.blit(_render_text(small, f"{sub}", st.dim), (r.x + 8, r.y + 28))
+        screen.blit(_render_text(small, f"{sub}{badges}"[:34], st.dim), (r.x + 8, r.y + 28))
 
-    hint = _render_text(small, f"{len(graph.nodes)} nodes · {len(graph.links)} links · [R] run · [Q] quit", st.dim)
+    hint = _render_text(small, f"{len(graph.nodes)} nodes · {len(graph.links)} links · click select · [R] run · [Q] quit", st.dim)
     screen.blit(hint, (area.x + 12, area.bottom - 22))
     return area
 
@@ -364,11 +595,15 @@ __all__ = [
     "GraphAdapter",
     "PygameStyle",
     "StreamlitContainer",
+    "compute_boxes",
     "field_to_pil",
     "gradio_register_grapheditor",
     "image_to_pil",
     "layout_graph",
     "payload_to_pil",
+    "pygame_adjust_selected",
+    "pygame_draw_inspector",
+    "pygame_node_at",
     "pygame_register_grapheditor",
     "streamlit_register_grapheditor",
 ]

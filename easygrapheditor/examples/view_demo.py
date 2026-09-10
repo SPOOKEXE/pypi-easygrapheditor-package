@@ -23,6 +23,8 @@ DEMOS: dict[str, tuple[str, str]] = {
     "noiseterrain": ("noise_terrain_demo", "Noise Terrain"),
     "normterrain": ("normterrain_demo", "Normalized Terrain"),
     "aitrace": ("ai_trace_factory_demo", "AI Trace Factory"),
+    "loop": ("loop_demo", "Loop: count to target"),
+    "subflow": ("subflow_demo", "Subworkflow: combine + expand"),
 }
 
 
