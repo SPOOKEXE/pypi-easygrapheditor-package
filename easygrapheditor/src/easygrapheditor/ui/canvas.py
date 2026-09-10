@@ -23,3 +23,4 @@ class EditorState:
     run_report: RunReport | None = None
     errors: list[str] = field(default_factory=list)
     live: bool = True
+    drag_offsets: dict[str, tuple[float, float]] = field(default_factory=dict)  # session node displacement (px)

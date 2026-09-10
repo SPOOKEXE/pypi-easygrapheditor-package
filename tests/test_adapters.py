@@ -124,7 +124,7 @@ def test_gradio_register_builds():
     adapter.run()
     with gr.Blocks() as blocks:
         refs = gradio_register_grapheditor(blocks, adapter, title="Tiny")
-    assert {"summary", "gallery", "table", "run", "adapter"} <= set(refs)
+    assert {"summary", "canvas", "gallery", "table", "run", "live", "clear", "notice", "adapter"} <= set(refs)
 
 
 def test_streamlit_register_fake_container():
@@ -171,16 +171,28 @@ def test_pygame_viewer_quits_headless():
         pygame.quit()
 
 
+def _minimal_page() -> None:
+    """Streamlit page body, fully self-contained (see test_live._loop_page)."""
+    import sys
+    from pathlib import Path
+
+    import easygrapheditor
+
+    pkg = Path(easygrapheditor.__file__).resolve()
+    sys.argv = ["view_demo.py", "--demo", "minimal", "--ui", "streamlit"]
+    sys.path.insert(0, str(pkg.parents[1]))  # .../easygrapheditor/src
+    sys.path.insert(0, str(pkg.parents[2] / "examples"))  # .../easygrapheditor/examples
+    import view_demo
+
+    view_demo.main()
+
+
 def test_streamlit_view_demo_renders():
     """Full page render via streamlit's headless AppTest (no browser needed)."""
     from streamlit.testing.v1 import AppTest
 
-    argv, sys.argv = sys.argv, ["view_demo.py", "--demo", "minimal", "--ui", "streamlit"]
-    try:
-        at = AppTest.from_file(str(ROOT / "easygrapheditor" / "examples" / "view_demo.py"), default_timeout=30)
-        at.run()
-    finally:
-        sys.argv = argv
+    at = AppTest.from_function(_minimal_page, default_timeout=30)
+    at.run()
     assert not at.exception, at.exception
     assert len(at.markdown) >= 1 and len(at.button) >= 1
 
