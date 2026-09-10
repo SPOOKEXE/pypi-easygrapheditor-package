@@ -22,8 +22,9 @@ declare -A DEMOS=(
   [terrain]="terrain_demo.py|Node library listing (stub)"
   [loop]="loop_demo.py|Counter + accumulate until the end condition finishes"
   [subflow]="subflow_demo.py|Combine nodes into one, run, expand back"
+  [combined]="combined_demos.py|All demos tiled in one grid graph, run once"
 )
-NAMES="minimal noiseterrain stagedarith normterrain aitrace terrain loop subflow"
+NAMES="minimal noiseterrain stagedarith normterrain aitrace terrain loop subflow combined"
 UIS="headless pygame gradio streamlit"
 
 DEMO=""

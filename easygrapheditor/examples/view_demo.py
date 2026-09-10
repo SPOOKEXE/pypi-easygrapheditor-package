@@ -25,6 +25,7 @@ DEMOS: dict[str, tuple[str, str]] = {
     "aitrace": ("ai_trace_factory_demo", "AI Trace Factory"),
     "loop": ("loop_demo", "Loop: count to target"),
     "subflow": ("subflow_demo", "Subworkflow: combine + expand"),
+    "combined": ("combined_demos", "Combined: all demos in one grid"),
 }
 
 
