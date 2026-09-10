@@ -111,3 +111,82 @@ def test_node_type_choices_sorted():
     choices = node_type_choices()
     assert len(choices) > 10
     assert all("[" in label for _, label in choices)
+
+
+def test_group_ungroup_and_prune():
+    from easygrapheditor.ui.editing import group_nodes, ungroup
+
+    g, n, r = _pair()
+    with pytest.raises(ValueError, match="at least 2"):
+        group_nodes(g, [n.id], "Solo")
+    with pytest.raises(ValueError, match="Unknown nodes"):
+        group_nodes(g, [n.id, r.id, "ghost"], "Bad")
+    with pytest.raises(ValueError, match="color"):
+        group_nodes(g, [n.id, r.id], "Bad", color="chartreuse")
+    grp = group_nodes(g, [n.id, r.id], "Pair", color="blue")
+    assert grp.name in [x.name for x in g.groups]
+    with pytest.raises(ValueError, match="already grouped"):
+        group_nodes(g, [n.id, r.id], "Again")
+    freed = ungroup(g, grp.name)
+    assert sorted(freed) == sorted([n.id, r.id]) and g.groups == []
+    with pytest.raises(ValueError, match="Unknown group"):
+        ungroup(g, grp.name)
+
+
+def test_remove_prunes_groups():
+    from easygrapheditor.ui.editing import group_nodes
+
+    g, n, r = _pair()
+    extra = g.add_node("input.number", params={"value": 3.0})
+    group_nodes(g, [n.id, r.id, extra.id], "Trio")
+    remove_node(g, extra.id)
+    assert len(g.groups) == 1  # 2 members left: group survives
+    remove_node(g, r.id)
+    assert g.groups == []  # <2 members: group dropped
+
+
+def test_groups_serialize():
+    from easygrapheditor.ui.editing import group_nodes
+
+    g, n, r = _pair()
+    group_nodes(g, [n.id, r.id], "Pair")
+    g2 = Graph.from_json(g.to_json())
+    assert len(g2.groups) == 1 and g2.groups[0].title == "Pair"
+    assert sorted(g2.groups[0].nodes) == sorted([n.id, r.id])
+
+
+def test_copy_paste_roundtrip_runs_equal():
+    from easygrapheditor.ui.editing import copy_selection, paste_clipboard
+
+    g = Graph()
+    n1 = g.add_node("input.number", params={"value": 2.0})
+    n2 = g.add_node("input.number", params={"value": 3.0})
+    ad = g.add_node("maths.arithmetic", params={"operation": "add"})
+    g.add_link(n1.id, "out", ad.id, "a")
+    g.add_link(n2.id, "out", ad.id, "b")
+    clip = copy_selection(g, [n1.id, n2.id, ad.id])
+    assert len(clip["nodes"]) == 3 and len(clip["links"]) == 2
+    fresh = Graph()
+    pasted = paste_clipboard(fresh, clip)
+    assert len(pasted) == 3 and len(set(pasted)) == 3
+    assert fresh.validate() == []
+    assert fresh.nodes[pasted[0]].pos[0] == g.nodes[n1.id].pos[0] + 40.0
+    ex = Executor(fresh)
+    assert ex.run_blocking().ok()
+    assert sorted(ex.outputs.values(), key=str)[-1] == {"out": 5.0}
+    with pytest.raises(ValueError, match="Unknown nodes"):
+        copy_selection(g, ["ghost"])
+
+
+def test_port_value_preview():
+    import numpy as np
+
+    from easygrapheditor.engine.types import Field
+    from easygrapheditor.ui.editing import port_value_preview
+
+    assert port_value_preview(None) == "—"
+    assert port_value_preview(2.5) == "2.5"
+    assert port_value_preview(True) == "True"
+    assert port_value_preview("x" * 200).endswith("…")
+    assert "field (4, 4)" in port_value_preview(Field(data=np.zeros((4, 4), dtype=np.float32)))
+    assert port_value_preview({"a": 1, "b": 2}) == "{a,b}"

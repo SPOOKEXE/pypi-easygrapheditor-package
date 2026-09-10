@@ -38,16 +38,52 @@ class ValidationError:
     message: str
 
 
+@dataclass
+class GroupDef:
+    """Visual group (ComfyUI-style): move together, titled box, no execution semantics."""
+
+    name: str
+    title: str
+    nodes: list[str] = field(default_factory=list)
+    color: str = "slate"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> GroupDef:
+        return cls(name=str(d.get("name", "group")), title=str(d.get("title", "Group")),
+                   nodes=list(d.get("nodes", [])), color=str(d.get("color", "slate")))
+
+
 class Graph:
     def __init__(self) -> None:
         self.nodes: dict[str, NodeInstance] = {}
         self.links: list[Link] = []
         self.loops: list[LoopDef] = []
+        self.groups: list[GroupDef] = []
 
     def add_loop(self, name: str, body: list[str], condition: str, max_iterations: int = DEFAULT_MAX_ITERATIONS) -> LoopDef:
         loop = LoopDef(name=name, body=list(body), condition=condition, max_iterations=max_iterations)
         self.loops.append(loop)
         return loop
+
+    def add_group(self, title: str, nodes: list[str], color: str = "slate") -> GroupDef:
+        group = GroupDef(name=f"group_{len(self.groups) + 1}", title=title, nodes=list(nodes), color=color)
+        self.groups.append(group)
+        return group
+
+    def group_of(self, nid: str) -> GroupDef | None:
+        for group in self.groups:
+            if nid in group.nodes:
+                return group
+        return None
+
+    def prune_groups(self, removed: set[str]) -> None:
+        """Drop deleted nodes from groups; drop groups left with <2 nodes."""
+        for group in self.groups:
+            group.nodes = [nid for nid in group.nodes if nid not in removed]
+        self.groups = [g for g in self.groups if len(g.nodes) >= 2]
 
     def add_node(self, type_id: str, params: dict[str, Any] | None = None,
                  pos: tuple[float, float] = (0.0, 0.0)) -> NodeInstance:
@@ -200,6 +236,7 @@ class Graph:
             "nodes": [asdict(n) for n in self.nodes.values()],
             "links": [asdict(link) for link in self.links],
             "loops": [loop.to_dict() for loop in self.loops],
+            "groups": [group.to_dict() for group in self.groups],
         }
 
     @classmethod
@@ -213,6 +250,8 @@ class Graph:
             g.links.append(Link(**ld))
         for loop_dict in d.get("loops", []):
             g.loops.append(LoopDef.from_dict(loop_dict))
+        for group_dict in d.get("groups", []):
+            g.groups.append(GroupDef.from_dict(group_dict))
         return g
 
     def to_json(self) -> str:

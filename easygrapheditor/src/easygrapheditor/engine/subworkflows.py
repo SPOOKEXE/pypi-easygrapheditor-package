@@ -94,6 +94,7 @@ def combine_nodes(graph: Graph, node_ids: list[str], label: str, new_pos: tuple[
     graph.links = keep
     for nid in selected:
         del graph.nodes[nid]
+    graph.prune_groups(selected)
     sub = graph.add_node(
         SUBWORKFLOW_TYPE_ID,
         params={

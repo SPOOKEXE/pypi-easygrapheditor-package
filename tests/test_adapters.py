@@ -69,6 +69,10 @@ class FakeContainer:
         self.calls.append(("checkbox", label))
         return k.get("value", False)
 
+    def multiselect(self, label: str, options, *a, **k) -> list:
+        self.calls.append(("multiselect", label))
+        return []
+
     def file_uploader(self, label: str, *a, **k):
         self.calls.append(("file_uploader", label))
 

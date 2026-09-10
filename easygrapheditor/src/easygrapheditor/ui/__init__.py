@@ -1,6 +1,7 @@
 """UI package."""
 
 from .adapters import (
+    DTYPE_COLORS,
     AdapterOptions,
     GraphAdapter,
     PygameStyle,
@@ -12,6 +13,8 @@ from .adapters import (
     layout_graph,
     output_thumbnail_surface,
     payload_to_pil,
+    port_anchors,
+    port_color,
     pygame_adjust_selected,
     pygame_draw_inspector,
     pygame_node_at,
@@ -32,6 +35,7 @@ from .widgets import (
 )
 
 __all__ = [
+    "DTYPE_COLORS",
     "AdapterOptions",
     "EditorBackend",
     "EditorState",
@@ -50,6 +54,8 @@ __all__ = [
     "layout_graph",
     "output_thumbnail_surface",
     "payload_to_pil",
+    "port_anchors",
+    "port_color",
     "pygame_adjust_selected",
     "pygame_draw_inspector",
     "pygame_node_at",

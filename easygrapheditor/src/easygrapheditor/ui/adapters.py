@@ -127,6 +127,7 @@ class GraphAdapter:
 
     def node_rows(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
+        groups_of = {nid: group.title for group in self.state.graph.groups for nid in group.nodes}
         for nid, inst in self.state.graph.nodes.items():
             ndef = get_node(inst.type_id)
             rep = self.report.per_node.get(nid) if self.report else None
@@ -142,6 +143,7 @@ class GraphAdapter:
                     "error": rep.error if rep and rep.error else "",
                     "loop": self.loop_of(nid),
                     "subflow": subflow,
+                    "group": groups_of.get(nid, ""),
                 }
             )
         return rows
@@ -161,6 +163,8 @@ class GraphAdapter:
             )
         detail["params"] = params
         detail["loop"] = self.loop_of(nid)
+        group = self.state.graph.group_of(nid)
+        detail["group"] = {"name": group.name, "title": group.title} if group else None
         detail["instance_params"] = dict(inst.params)
         if inst.type_id == SUBWORKFLOW_TYPE_ID:
             from ..engine.subworkflows import describe_subworkflow
@@ -251,14 +255,18 @@ def gradio_register_grapheditor(host: Any, source: GraphAdapter | EditorState | 
         raise ImportError("Install the gradio extra: pip install 'easygrapheditor[gradio]'") from e
 
     from .editing import (
+        GROUP_COLORS,
         add_node_at,
         compatible_inputs,
         connect,
         disconnect,
+        group_nodes,
         link_labels,
         node_type_choices,
+        port_value_preview,
         remove_node,
         render_canvas_image,
+        ungroup,
     )
 
     o = AdapterOptions(**{k: v for k, v in opts.items() if k in AdapterOptions.__dataclass_fields__})
@@ -437,8 +445,68 @@ def gradio_register_grapheditor(host: Any, source: GraphAdapter | EditorState | 
                             return _maybe_live(live)
 
                         gr.Button(f"Apply {loop.name}", size="sm").click(_on_loop_apply, inputs=[max_box, live_box], outputs=outs_full)
+
+        with gr.Accordion("Ports: live values", open=False):
+            port_node = gr.Dropdown(choices=sorted(adapter.state.graph.nodes), label="Node")
+            ports_md = gr.Markdown("Pick a node to inspect its ports.")
+            ports_gallery = gr.Gallery(value=[], label="Port previews")
+
+            def _on_ports(nid: str | None) -> tuple[str, list]:
+                if not nid or nid not in adapter.state.graph.nodes:
+                    return "Pick a node to inspect its ports.", []
+                detail = adapter.describe_node(nid)
+                lines = [f"**{detail.get('title', nid)}** (`{nid}`)"]
+                for side in ("inputs", "outputs"):
+                    lines.append(f"_{side.capitalize()}_")
+                    for key, dtype in detail.get(side, []):
+                        preview = ""
+                        if side == "outputs":
+                            preview = f" = {port_value_preview(adapter.executor.outputs.get(nid, {}).get(key))}"
+                        lines.append(f"- `{key}` [{dtype}]{preview}")
+                images = []
+                for _key, img in _port_images(adapter, nid):
+                    images.append(img)
+                return "\n".join(lines), images
+
+            port_node.change(_on_ports, inputs=[port_node], outputs=[ports_md, ports_gallery])
+
+        with gr.Accordion("Groups: visual multi-node boxes", open=False):
+            group_multi = gr.Dropdown(choices=sorted(adapter.state.graph.nodes), multiselect=True, label="Nodes")
+            group_title = gr.Textbox(value="", label="Title")
+            group_color = gr.Dropdown(choices=sorted(GROUP_COLORS), value="slate", label="Color")
+            group_btn = gr.Button("Group selection", size="sm")
+            ungroup_drop = gr.Dropdown(choices=[g.name for g in adapter.state.graph.groups], label="Group")
+            ungroup_btn = gr.Button("Ungroup", size="sm")
+
+            def _on_group(nids: list[str] | None, title: str, color: str, live: bool) -> tuple:
+                try:
+                    grp = group_nodes(adapter.state.graph, list(nids or []), title or "Group", color)
+                    adapter.mark_dirty()
+                    s = _maybe_live(live)
+                    return (*s, gr.Markdown(f"Grouped `{grp.name}` ({len(grp.nodes)} nodes).", visible=True))
+                except ValueError as e:
+                    return (*_refresh_full(), gr.Markdown(f"Cannot group: {e}", visible=True))
+
+            def _on_ungroup(name: str | None, live: bool) -> tuple:
+                if name:
+                    ungroup(adapter.state.graph, name)
+                    adapter.mark_dirty()
+                return (*_maybe_live(live), gr.Markdown("", visible=False))
+
+            group_btn.click(_on_group, inputs=[group_multi, group_title, group_color, live_box], outputs=[*outs_full, notice])
+            ungroup_btn.click(_on_ungroup, inputs=[ungroup_drop, live_box], outputs=[*outs_full, notice])
     return {"summary": summary, "canvas": canvas, "gallery": gallery, "table": table, "run": run_btn,
             "live": live_box, "clear": clear_btn, "notice": notice, "adapter": adapter}
+
+
+def _port_images(adapter: GraphAdapter, nid: str) -> list[tuple[str, Any]]:
+    """(port, PIL) previews for a node's Field/Image outputs."""
+    out = []
+    for port, value in adapter.executor.outputs.get(nid, {}).items():
+        img = payload_to_pil(value)
+        if img is not None:
+            out.append((port, img))
+    return out
 
 
 # ----------------------------------------------- streamlit (host-provided)
@@ -473,14 +541,18 @@ def streamlit_register_grapheditor(
             raise ImportError("Install the streamlit extra: pip install 'easygrapheditor[streamlit]'") from e
         container = st
     from .editing import (
+        GROUP_COLORS,
         add_node_at,
         compatible_inputs,
         connect,
         disconnect,
+        group_nodes,
         link_labels,
         node_type_choices,
+        port_value_preview,
         remove_node,
         render_canvas_image,
+        ungroup,
     )
 
     session_key = opts.get("session_key")
@@ -564,6 +636,44 @@ def streamlit_register_grapheditor(
                 if live:
                     adapter.run()
                 _rerun()
+        with container.expander("Ports: live values", expanded=False):
+            inspected = container.selectbox("Node", ids, key="ege:ports:node") if ids else None
+            if inspected:
+                detail = adapter.describe_node(inspected)
+                container.markdown(f"**{detail.get('title', inspected)}** (`{inspected}`)")
+                for side in ("inputs", "outputs"):
+                    container.markdown(f"_{side.capitalize()}_")
+                    for key, dtype in detail.get(side, []):
+                        preview = ""
+                        if side == "outputs":
+                            preview = f" = {port_value_preview(adapter.executor.outputs.get(inspected, {}).get(key))}"
+                        container.markdown(f"- `{key}` [{dtype}]{preview}")
+                for _port, img in _port_images(adapter, inspected):
+                    container.image(img, caption=f"{inspected} · {_port}")
+        with container.expander("Groups: visual multi-node boxes", expanded=False):
+            picked = container.multiselect("Nodes", ids, key="ege:group:nodes") if ids else []
+            gtitle = container.text_input("Title", value="", key="ege:group:title")
+            gcolor = container.selectbox("Color", sorted(GROUP_COLORS), key="ege:group:color")
+            if container.button("Group selection", key="ege:group:go"):
+                try:
+                    grp = group_nodes(adapter.state.graph, list(picked or []), gtitle or "Group", gcolor)
+                    adapter.mark_dirty()
+                    if live:
+                        adapter.run()
+                    container.markdown(f"Grouped `{grp.name}` ({len(grp.nodes)} nodes).")
+                except ValueError as e:
+                    container.markdown(f"Cannot group: {e}")
+                _rerun()
+            existing_groups = [(g.name, g.title, len(g.nodes)) for g in adapter.state.graph.groups]
+            if existing_groups:
+                container.json([{"name": n, "title": t, "nodes": c} for n, t, c in existing_groups])
+                doomed_g = container.selectbox("Group", [n for n, _, _ in existing_groups], key="ege:ungroup")
+                if container.button("Ungroup", key="ege:ungroup:go") and doomed_g:
+                    ungroup(adapter.state.graph, doomed_g)
+                    adapter.mark_dirty()
+                    if live:
+                        adapter.run()
+                    _rerun()
         with container.expander("Inspector: node params", expanded=False):
             for nid, inst in list(adapter.state.graph.nodes.items()):
                 ndef = get_node(inst.type_id)
@@ -668,20 +778,69 @@ def _render_text(kind_font: tuple[str, Any], text: str, color: tuple[int, int, i
     return surf
 
 
-def compute_boxes(graph: Graph, area: Any, style: PygameStyle, offsets: dict[str, tuple[float, float]] | None = None) -> dict[str, Any]:
-    """Node id -> pygame.Rect. ``offsets`` adds session drag displacement (px)."""
+def compute_boxes(
+    graph: Graph,
+    area: Any,
+    style: PygameStyle,
+    offsets: dict[str, tuple[float, float]] | None = None,
+    view: tuple[float, float, float] = (0.0, 0.0, 1.0),
+) -> dict[str, Any]:
+    """Node id -> pygame.Rect. ``offsets`` adds session drag displacement (layout px);
+    ``view`` is (ox, oy, k) pan/zoom applied in screen space."""
     import pygame
 
     from .editing import layout_boxes_px
 
-    plain = layout_boxes_px(graph, area.w, area.h, style.node_w, style.node_h, style.col_gap, style.row_gap,
-                            top=area.y + 36, left=area.x + 16)
-    boxes, _pos = plain
+    ox, oy, k = view
+    plain, _pos = layout_boxes_px(graph, area.w, area.h, style.node_w, style.node_h, style.col_gap, style.row_gap,
+                                  top=36, left=16)
     out = {}
-    for nid, (x, y, w, h) in boxes.items():
+    for nid, (x, y, w, h) in plain.items():
         dx, dy = (offsets or {}).get(nid, (0.0, 0.0))
-        out[nid] = pygame.Rect(int(x + dx), int(y + dy), w, h)
+        out[nid] = pygame.Rect(int(area.x + ox + (x + dx) * k), int(area.y + oy + (y + dy) * k),
+                               max(8, int(w * k)), max(8, int(h * k)))
     return out
+
+
+#: Port dot colors by data type (ComfyUI-style type coloring).
+DTYPE_COLORS: dict[str, tuple[int, int, int]] = {
+    "data.NUMBER": (220, 200, 110),
+    "data.FIELD": (110, 160, 230),
+    "data.IMAGE": (230, 130, 180),
+    "data.TEXT": (110, 200, 190),
+    "data.TRACE": (110, 200, 190),
+    "data.ANY": (150, 150, 160),
+}
+
+
+def port_color(dtype: str) -> tuple[int, int, int]:
+    if dtype in DTYPE_COLORS:
+        return DTYPE_COLORS[dtype]
+    if dtype.startswith("data."):
+        return (110, 160, 230)
+    return (140, 150, 180)  # extension types (IMAGE/MASK/VIDEO/...)
+
+
+def port_anchors(graph: Graph, boxes: dict[str, Any]) -> tuple[dict[str, list], dict[str, list]]:
+    """(node -> [(port, x, y, dtype)]) for input (left) / output (right) edges."""
+    ins: dict[str, list] = {}
+    outs: dict[str, list] = {}
+    for nid, inst in graph.nodes.items():
+        box = boxes.get(nid)
+        if box is None:
+            continue
+        ndef = get_node(inst.type_id)
+        if inst.type_id == SUBWORKFLOW_TYPE_ID:
+            in_ports = [(m["key"], str(m.get("dtype", "data.ANY"))) for m in inst.params.get("inputs", [])]
+            out_ports = [(m["key"], str(m.get("dtype", "data.ANY"))) for m in inst.params.get("outputs", [])]
+        else:
+            in_ports = [(p.key, p.dtype) for p in ndef.inputs] if ndef else []
+            out_ports = [(p.key, p.dtype) for p in ndef.outputs] if ndef else []
+        ins[nid] = [(p, box.x, int(box.y + (i + 1) * box.height / (len(in_ports) + 1)), dt)
+                    for i, (p, dt) in enumerate(in_ports)]
+        outs[nid] = [(p, box.right, int(box.y + (i + 1) * box.height / (len(out_ports) + 1)), dt)
+                     for i, (p, dt) in enumerate(out_ports)]
+    return ins, outs
 
 
 def output_thumbnail_surface(value: Any, size: int = 56) -> Any | None:
@@ -781,16 +940,19 @@ def pygame_register_grapheditor(
     style: PygameStyle | None = None,
     title: str = "Graph Editor",
     offsets: dict[str, tuple[float, float]] | None = None,
+    view: tuple[float, float, float] = (0.0, 0.0, 1.0),
     thumbnails: bool = True,
+    highlight: set[tuple[str, str]] | None = None,
 ) -> Any:
     """Draw graph visualisation onto a caller-provided pygame Surface.
 
     ``screen`` is your display/subsurface — we paint inside ``rect`` (default:
     the whole surface inset by 12px) and return the dirty rect. ``offsets``
     applies session drag displacement (defaults to the state's drag_offsets);
-    ``thumbnails`` toggles live Field/Image previews. No event loop is owned
-    here; see ``pygame_app.run_pygame_viewer`` for the standalone live
-    editor loop.
+    ``view`` is (ox, oy, k) pan/zoom; ``thumbnails`` toggles live Field/Image
+    previews; ``highlight`` rings (node, port) anchors (e.g. while wiring).
+    No event loop is owned here; see ``pygame_app.run_pygame_viewer``
+    for the standalone live editor loop.
     """
     try:
         import pygame
@@ -810,11 +972,26 @@ def pygame_register_grapheditor(
     pygame.draw.rect(screen, st.panel, area, border_radius=8)
     screen.blit(_render_text(font, title, st.text), (area.x + 12, area.y + 8))
 
-    boxes = compute_boxes(graph, area, st, offsets=offsets)
+    boxes = compute_boxes(graph, area, st, offsets=offsets, view=view)
     for link in graph.links:
         if link.from_node in boxes and link.to_node in boxes:
             a, b = boxes[link.from_node], boxes[link.to_node]
             pygame.draw.line(screen, st.edge, a.midright, b.midleft, 2)
+
+    # visual groups behind member nodes
+    from .editing import GROUP_COLORS
+
+    for group in graph.groups:
+        members = [boxes[nid] for nid in group.nodes if nid in boxes]
+        if not members:
+            continue
+        gx0 = min(b.x for b in members) - 14
+        gy0 = min(b.y for b in members) - 30
+        gx1 = max(b.right for b in members) + 14
+        gy1 = max(b.bottom for b in members) + 14
+        color = GROUP_COLORS.get(group.color, GROUP_COLORS["slate"])
+        pygame.draw.rect(screen, color, pygame.Rect(gx0, gy0, gx1 - gx0, gy1 - gy0), 2, border_radius=10)
+        screen.blit(_render_text(font, group.title[:36], color), (gx0 + 10, gy0 + 6))
 
     thumbs: dict[str, Any] = {}
     if thumbnails:
@@ -826,6 +1003,8 @@ def pygame_register_grapheditor(
                     break
 
     selected = set(adapter.state.selection)
+    ins, outs = port_anchors(graph, boxes)
+    highlight = highlight or set()
     for nid, inst in graph.nodes.items():
         ndef = get_node(inst.type_id)
         rep = adapter.report.per_node.get(nid) if adapter.report else None
@@ -841,11 +1020,25 @@ def pygame_register_grapheditor(
             badges += f" [loop:{loop}]"
         if inst.type_id == SUBWORKFLOW_TYPE_ID:
             badges += f" [sub:{len(inst.params.get('nodes', []))}]"
+        group = graph.group_of(nid)
+        if group:
+            badges += f" [{group.title[:12]}]"
         screen.blit(_render_text(font, (ndef.title if ndef else inst.type_id)[:22], st.text), (r.x + 8, r.y + 6))
         sub = f"{rep.status} {rep.ms:.0f}ms" if rep else "not run"
         screen.blit(_render_text(small, f"{sub}{badges}"[:34], st.dim), (r.x + 8, r.y + 28))
         if nid in thumbs:
             screen.blit(thumbs[nid], (r.right + 4, r.y - 2))
+    # typed port dots (ringed when in the wiring highlight set)
+    for nid, anchors in ins.items():
+        for port, x, y, dtype in anchors:
+            pygame.draw.circle(screen, port_color(dtype), (x, y), 4)
+            if (nid, port) in highlight:
+                pygame.draw.circle(screen, (240, 240, 245), (x, y), 7, 2)
+    for nid, anchors in outs.items():
+        for port, x, y, dtype in anchors:
+            pygame.draw.circle(screen, port_color(dtype), (x, y), 4)
+            if (nid, port) in highlight:
+                pygame.draw.circle(screen, (240, 240, 245), (x, y), 7, 2)
 
     hint = _render_text(small, f"{len(graph.nodes)} nodes · {len(graph.links)} links · click select · [R] run · [Q] quit", st.dim)
     screen.blit(hint, (area.x + 12, area.bottom - 22))
@@ -853,6 +1046,7 @@ def pygame_register_grapheditor(
 
 
 __all__ = [
+    "DTYPE_COLORS",
     "AdapterOptions",
     "GraphAdapter",
     "PygameStyle",
@@ -864,6 +1058,8 @@ __all__ = [
     "layout_graph",
     "output_thumbnail_surface",
     "payload_to_pil",
+    "port_anchors",
+    "port_color",
     "pygame_adjust_selected",
     "pygame_draw_inspector",
     "pygame_node_at",

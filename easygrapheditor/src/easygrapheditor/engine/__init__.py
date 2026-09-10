@@ -2,7 +2,7 @@
 
 from .cache import Cache, content_hash
 from .execute import Executor, NodeReport, RunReport
-from .graph import SUBWORKFLOW_TYPE_ID, Graph, Link, NodeInstance, ValidationError
+from .graph import SUBWORKFLOW_TYPE_ID, Graph, GroupDef, Link, NodeInstance, ValidationError
 from .loops import (
     DEFAULT_MAX_ITERATIONS,
     END_CONDITION_TYPE_ID,
@@ -53,6 +53,7 @@ __all__ = [
     "Executor",
     "Field",
     "Graph",
+    "GroupDef",
     "Image",
     "Link",
     "LoopDef",
