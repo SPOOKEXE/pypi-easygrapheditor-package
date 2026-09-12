@@ -6,6 +6,7 @@ See editor.md §4.1 and plans/ screenshots 15-42-41 (Types tab).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any as AnyHint
 from typing import Literal
 
 import numpy as np
@@ -23,6 +24,9 @@ class DataType:
 
 # Payloads (v1, see editor.md §4.5).
 Number = float
+# Public annotation hint for wildcard ports. ``ANY`` remains the runtime
+# wildcard value used by the type registry.
+Any = AnyHint
 
 
 @dataclass
@@ -74,6 +78,8 @@ for _tid, _label, _desc in [
     ("MASK", "Mask", "Comfy mask."),
     ("VIDEO", "Video", "Comfy video."),
     ("MODEL", "Model", "Diffusion model."),
+    ("CLIP", "CLIP", "Comfy CLIP encoder."),
+    ("VAE", "VAE", "Comfy VAE."),
     ("CONDITIONING", "Conditioning", "CLIP conditioning."),
     ("LATENT", "Latent", "Latent tensor."),
 ]:

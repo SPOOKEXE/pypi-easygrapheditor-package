@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import inspect
+import types
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from dataclasses import dataclass, field, replace
+from typing import Annotated, Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from .types import Field, Image, Number
 
@@ -59,6 +60,7 @@ class PortDef:
     label: str
     dtype: str  # e.g. "data.NUMBER"
     direction: Literal["in", "out"]
+    required: bool = True
 
 
 @dataclass
@@ -67,9 +69,31 @@ class ExecCtx:
     params: dict[str, Any]
     iteration: int = 0  # loop iteration index (0 outside loops); drives control.counter etc.
     _stages: list[tuple[str, float]] = field(default_factory=list)
+    _on_stage: Callable[[str, float], None] | None = field(default=None, repr=False)
+    cancel_token: Any = field(default=None, repr=False)
 
     def report(self, stage: str, frac: float) -> None:
-        self._stages.append((stage, frac))
+        event = (str(stage), max(0.0, min(1.0, float(frac))))
+        self._stages.append(event)
+        if self._on_stage is not None:
+            self._on_stage(*event)
+
+    @property
+    def cancelled(self) -> bool:
+        token = self.cancel_token
+        if token is None:
+            return False
+        check = getattr(token, "is_cancelled", None)
+        if callable(check):
+            return bool(check())
+        check = getattr(token, "is_set", None)
+        return bool(check()) if callable(check) else bool(getattr(token, "cancelled", False))
+
+    def check_cancelled(self) -> None:
+        if self.cancelled:
+            import asyncio
+
+            raise asyncio.CancelledError(f"node '{self.node_id}' cancelled")
 
 
 @dataclass
@@ -91,7 +115,24 @@ NODE_REGISTRY: dict[str, NodeDef] = {}
 
 
 def _hint_to_dtype(ann: Any) -> str:
-    if ann in (float, int, Number, "Number"):
+    """Map runtime and postponed annotations to the stable port type ids."""
+    if isinstance(ann, str):
+        tail = ann.rsplit(".", 1)[-1].strip(" '\"")
+        return {
+            "float": "data.NUMBER",
+            "int": "data.NUMBER",
+            "Number": "data.NUMBER",
+            "Field": "data.FIELD",
+            "Image": "data.IMAGE",
+        }.get(tail, "data.ANY")
+    origin = get_origin(ann)
+    if origin is Annotated:
+        return _hint_to_dtype(get_args(ann)[0])
+    if origin in (Union, types.UnionType):
+        args = [arg for arg in get_args(ann) if arg is not type(None)]
+        dtypes = {_hint_to_dtype(arg) for arg in args}
+        return dtypes.pop() if len(dtypes) == 1 else "data.ANY"
+    if ann in (float, int, Number):
         return "data.NUMBER"
     if ann is Field or getattr(ann, "__name__", "") == "Field":
         return "data.FIELD"
@@ -108,9 +149,20 @@ def Param(
     max: float | None = None,
     step: float | None = None,
     options: list[str] | None = None,
+    affects_hash: bool = True,
 ) -> ParamDef:
     """Declare a rich param widget. Used as a default value marker."""
-    return ParamDef(key="", label=label, kind=kind, default=default, min=min, max=max, step=step, options=options)
+    return ParamDef(
+        key="",
+        label=label,
+        kind=kind,
+        default=default,
+        min=min,
+        max=max,
+        step=step,
+        options=options,
+        affects_hash=affects_hash,
+    )
 
 
 def node(
@@ -136,18 +188,26 @@ def node(
     def wrap(fn: Callable) -> Callable:
         tid = type_id or f"{category.lower()}.{fn.__name__}"
         sig = inspect.signature(fn)
+        # get_type_hints resolves PEP 563/649-style postponed annotations.  A
+        # failed resolution is deliberately non-fatal for user supplied nodes.
+        try:
+            hints = get_type_hints(fn, include_extras=True)
+        except (NameError, TypeError):
+            hints = getattr(fn, "__annotations__", {})
         inferred_params: list[ParamDef] = []
         inferred_inputs: list[PortDef] = []
         ret_dtype = "data.NUMBER"
         for name, p in sig.parameters.items():
             if name == "ctx":
                 continue
-            ann = p.annotation if p.annotation is not inspect.Parameter.empty else Any
+            ann = hints.get(
+                name, p.annotation if p.annotation is not inspect.Parameter.empty else Any
+            )
             default = p.default if p.default is not inspect.Parameter.empty else None
             if isinstance(default, ParamDef):
-                default.key = default.key or name
-                default.label = default.label or name
-                inferred_params.append(default)
+                inferred_params.append(
+                    replace(default, key=default.key or name, label=default.label or name)
+                )
                 # ParamDefs also imply an input port if hinted as Field/Image/Number?
                 # Stub rule: ParamDef-marked args are params, not ports.
                 continue
@@ -157,7 +217,7 @@ def node(
             else:
                 inferred_inputs.append(PortDef(key=name, label=name, dtype=dtype, direction="in"))
         if sig.return_annotation is not inspect.Signature.empty:
-            ret_dtype = _hint_to_dtype(sig.return_annotation)
+            ret_dtype = _hint_to_dtype(hints.get("return", sig.return_annotation))
         inferred_outputs = [PortDef(key="out", label="Out", dtype=ret_dtype, direction="out")]
         ndef = NodeDef(
             type_id=tid,

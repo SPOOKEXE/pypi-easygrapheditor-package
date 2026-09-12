@@ -183,7 +183,14 @@ def _minimal_page() -> None:
     import easygrapheditor
 
     pkg = Path(easygrapheditor.__file__).resolve()
-    sys.argv = ["view_demo.py", "--demo", "minimal", "--ui", "streamlit"]
+    sys.argv = [
+        "view_demo.py",
+        "--demo",
+        "minimal",
+        "--ui",
+        "--backend",
+        "streamlit",
+    ]
     sys.path.insert(0, str(pkg.parents[1]))  # .../easygrapheditor/src
     sys.path.insert(0, str(pkg.parents[2] / "examples"))  # .../easygrapheditor/examples
     import view_demo

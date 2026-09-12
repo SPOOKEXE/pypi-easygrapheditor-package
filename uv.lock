@@ -380,16 +380,13 @@ wheels = [
 
 [[package]]
 name = "easygrapheditor"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
-    { name = "gradio" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pillow" },
-    { name = "pygame" },
-    { name = "streamlit" },
 ]
 
 [package.optional-dependencies]
@@ -414,19 +411,16 @@ streamlit = [
 
 [package.metadata]
 requires-dist = [
-    { name = "gradio", specifier = ">=6.26.0" },
-    { name = "gradio", marker = "extra == 'all'", specifier = ">=4.0" },
-    { name = "gradio", marker = "extra == 'gradio'", specifier = ">=4.0" },
+    { name = "gradio", marker = "extra == 'all'", specifier = ">=6.26" },
+    { name = "gradio", marker = "extra == 'gradio'", specifier = ">=6.26" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pillow", specifier = ">=10.0" },
-    { name = "pygame", specifier = ">=2.6.1" },
     { name = "pygame", marker = "extra == 'all'", specifier = ">=2.5" },
     { name = "pygame", marker = "extra == 'pygame'", specifier = ">=2.5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
-    { name = "streamlit", specifier = ">=1.63.0" },
-    { name = "streamlit", marker = "extra == 'all'", specifier = ">=1.30" },
-    { name = "streamlit", marker = "extra == 'streamlit'", specifier = ">=1.30" },
+    { name = "streamlit", marker = "extra == 'all'", specifier = ">=1.63" },
+    { name = "streamlit", marker = "extra == 'streamlit'", specifier = ">=1.63" },
 ]
 provides-extras = ["gradio", "streamlit", "pygame", "all", "dev"]
 

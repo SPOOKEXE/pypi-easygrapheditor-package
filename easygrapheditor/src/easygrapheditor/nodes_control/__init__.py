@@ -1,9 +1,9 @@
 """Control nodes: loop primitives driven by the executor's loop runner.
 
-* ``control.counter`` — current loop iteration (0 outside loops).
-* ``control.accumulate`` — loop-carried state (previous iteration's ``next``,
+* ``control.counter``: current loop iteration (0 outside loops).
+* ``control.accumulate``: loop-carried state (previous iteration's ``next``,
   ``initial`` on iteration 0; passthrough/initial standalone).
-* ``control.end_condition`` — EndConditionNode: computes ``done`` (1/0) from
+* ``control.end_condition``: EndConditionNode computes ``done`` (1/0) from
   counter, numeric threshold, or truthiness. The executor repeats the loop
   body until ``done`` or ``max_iterations`` (default 1000).
 """
@@ -38,7 +38,7 @@ def counter(ctx: ExecCtx) -> float:
     category="Control",
     color="purple",
     description="Loop-carried state: emits the previous iteration's value, latches the new one.",
-    inputs=[PortDef("next", "Next", "data.ANY", "in")],
+    inputs=[PortDef("next", "Next", "data.ANY", "in", required=False)],
     outputs=[PortDef("current", "Current", "data.ANY", "out")],
 )
 def accumulate(
@@ -55,13 +55,15 @@ def accumulate(
     category="Control",
     color="purple",
     description="Computes when a loop finishes: done=1 ends the loop after this pass.",
-    inputs=[PortDef("value", "Value", "data.ANY", "in")],
+    inputs=[PortDef("value", "Value", "data.ANY", "in", required=False)],
     outputs=[PortDef("done", "Done", "data.NUMBER", "out")],
 )
 def end_condition(
     ctx: ExecCtx,
     value: Any = None,  # type: ignore[no-untyped-def]
-    mode: str = Param("counter", kind="select", label="Mode", options=["counter", "threshold", "truthy"]),  # type: ignore[no-untyped-def]
+    mode: str = Param(
+        "counter", kind="select", label="Mode", options=["counter", "threshold", "truthy"]
+    ),  # type: ignore[no-untyped-def]
     target: float = Param(10.0, kind="number", label="Target"),  # type: ignore[no-untyped-def]
     tolerance: float = Param(0.0, kind="float_slider", label="Tolerance", min=0, max=10, step=0.01),  # type: ignore[no-untyped-def]
     iterations: int = Param(10, kind="step_slider", label="Iterations", min=1, max=1000, step=1),  # type: ignore[no-untyped-def]

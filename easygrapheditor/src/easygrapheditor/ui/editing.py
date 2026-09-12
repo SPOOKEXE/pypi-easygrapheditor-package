@@ -5,7 +5,7 @@ All mutations are plain functions over ``Graph`` so every UI backend
 
 * links are type-checked (``can_connect``, subworkflow-aware),
 * duplicates rejected,
-* cycles rejected — except ``control.accumulate.next`` feedback links,
+* cycles rejected, except ``control.accumulate.next`` feedback links,
   which carry previous-iteration values by design (loop feedback must go
   through an accumulate node).
 """
@@ -21,10 +21,10 @@ from ..engine.nodes import NODE_REGISTRY, get_node
 from ..engine.types import can_connect
 
 
-def node_type_choices() -> list[tuple[str, str]]:
+def node_type_choices(allowed: set[str] | None = None) -> list[tuple[str, str]]:
     """(type_id, 'Title [Category]') sorted for picker dropdowns."""
     return sorted(
-        ((n.type_id, f"{n.title} [{n.category}]") for n in NODE_REGISTRY.values()),
+        ((n.type_id, f"{n.title} [{n.category}]") for n in NODE_REGISTRY.values() if allowed is None or n.type_id in allowed),
         key=lambda t: t[1].lower(),
     )
 
@@ -135,14 +135,14 @@ GROUP_COLORS: dict[str, tuple[int, int, int]] = {
 def port_value_preview(value: Any, limit: int = 80) -> str:
     """One-line human preview of a live port value (for tooltips/inspectors)."""
     if value is None:
-        return "—"
+        return "none"
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, (int, float)):
         return f"{value:.4g}"
     if isinstance(value, str):
         text = value.replace("\n", " ")
-        return text[:limit] + ("…" if len(text) > limit else "") or "—"
+        return text[:limit] + ("…" if len(text) > limit else "") or "none"
     dataclass_data = getattr(value, "data", None)
     if dataclass_data is not None:
         import numpy as np
@@ -241,6 +241,10 @@ def layout_boxes_px(
     from .adapters import layout_graph
 
     pos, _depth = layout_graph(graph)
+    positioned = any(inst.pos != (0.0, 0.0) for inst in graph.nodes.values())
+    if positioned:
+        boxes = {nid: (int(left + x), int(top + y), node_w, node_h) for nid, (x, y) in pos.items()}
+        return boxes, pos
     max_col = max((int(x) for x, _ in pos.values()), default=0)
     max_row = max((int(y) for _, y in pos.values()), default=0)
     step_x = min(node_w + col_gap, max(width - 24, node_w) / max(max_col + 1, 1))
@@ -270,7 +274,7 @@ def render_canvas_image(
     from .adapters import payload_to_pil
 
     outputs = outputs or {}
-    img = PILImage.new("RGB", (width, height), (18, 20, 26))
+    img = PILImage.new("RGB", (width, height), (0, 0, 0))
     draw = ImageDraw.Draw(img)
     # grid dots
     for gx in range(0, width, 28):

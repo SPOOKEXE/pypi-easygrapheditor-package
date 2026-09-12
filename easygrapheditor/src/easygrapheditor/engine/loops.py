@@ -1,6 +1,6 @@
 """Loop support: repeat a node body until an EndConditionNode finishes.
 
-Model (cycle-free by construction — validation still forbids link cycles):
+Model (cycle-free by construction; validation still forbids link cycles):
 * A loop declares ``body`` (node ids run each iteration) + ``condition``
   (an ``control.end_condition`` node id whose ``done`` output ends the loop).
 * Loop-carried state uses ``control.accumulate`` (previous-iteration value)
@@ -19,7 +19,7 @@ DEFAULT_MAX_ITERATIONS = 1000
 END_CONDITION_TYPE_ID = "control.end_condition"
 
 #: Links into this (node type, port) carry previous-iteration values, so they
-#: are exempt from cycle detection and ordering everywhere. (Literal here —
+#: are exempt from cycle detection and ordering everywhere. (Literal here;
 #: importing nodes_control from engine modules would risk import cycles.)
 FEEDBACK_NODE_TYPE = "control.accumulate"
 FEEDBACK_PORT = "next"
@@ -66,15 +66,27 @@ def validate_loops(graph: Any, node_type_of: Any) -> list[Any]:
             errors.append(ValidationError(None, f"loop '{loop.name}' needs max_iterations >= 1"))
         for nid in loop.body:
             if node_type_of(nid) is None:
-                errors.append(ValidationError(nid, f"loop '{loop.name}' references unknown node '{nid}'"))
+                errors.append(
+                    ValidationError(nid, f"loop '{loop.name}' references unknown node '{nid}'")
+                )
             elif nid in seen:
-                errors.append(ValidationError(nid, f"node '{nid}' in two loops ('{seen[nid]}', '{loop.name}'): nested loops are v1-unsupported"))
+                errors.append(
+                    ValidationError(
+                        nid,
+                        f"node '{nid}' in two loops ('{seen[nid]}', '{loop.name}'): nested loops are v1-unsupported",
+                    )
+                )
             else:
                 seen[nid] = loop.name
         if not loop.condition:
             errors.append(ValidationError(None, f"loop '{loop.name}' has no condition node"))
         elif loop.condition not in loop.body:
-            errors.append(ValidationError(loop.condition, f"loop '{loop.name}' condition '{loop.condition}' must be inside the body"))
+            errors.append(
+                ValidationError(
+                    loop.condition,
+                    f"loop '{loop.name}' condition '{loop.condition}' must be inside the body",
+                )
+            )
         elif node_type_of(loop.condition) != END_CONDITION_TYPE_ID:
             errors.append(
                 ValidationError(
@@ -109,5 +121,7 @@ def loop_body_order(node_ids: list[str], links: list[Any], type_of: Any = None) 
             if indeg[nxt] == 0:
                 queue.append(nxt)
     if len(order) != len(node_ids):
-        raise ValueError("Loop body has a cycle; bodies must stay acyclic (use control.accumulate for feedback).")
+        raise ValueError(
+            "Loop body has a cycle; bodies must stay acyclic (use control.accumulate for feedback)."
+        )
     return order

@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import numpy as np
+from demo_runner import run_demo
 from easygrapheditor.engine import Cache, Executor, Graph
 from PIL import Image as PILImage
 
@@ -82,4 +83,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_demo(build=build, cli_main=main, title="Noise Terrain", description=__doc__ or "Noise terrain demo", script_path=__file__)

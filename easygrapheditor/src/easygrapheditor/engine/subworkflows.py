@@ -27,16 +27,37 @@ from .nodes import NODE_REGISTRY
 DEFAULT_MAX_RECURSIONS = 1000
 
 
-def _port_dtype_of(type_id: str, port_key: str, direction: str) -> str:
-    if type_id == SUBWORKFLOW_TYPE_ID:
+def _port_dtype_of(node: NodeInstance, port_key: str, direction: str) -> str:
+    """Read a port dtype, including the explicit maps of nested subflows."""
+    if node.type_id == SUBWORKFLOW_TYPE_ID:
+        maps = node.params.get("inputs" if direction == "in" else "outputs", [])
+        for mapping in maps:
+            if mapping.get("key") == port_key:
+                return str(mapping.get("dtype", "data.ANY"))
         return "data.ANY"
-    ndef = NODE_REGISTRY.get(type_id)
+    ndef = NODE_REGISTRY.get(node.type_id)
     if ndef is None:
         return "data.ANY"
     for port in ndef.outputs if direction == "out" else ndef.inputs:
         if port.key == port_key:
             return port.dtype
     return "data.ANY"
+
+
+def _port_required_of(node: NodeInstance, port_key: str) -> bool:
+    if node.type_id == SUBWORKFLOW_TYPE_ID:
+        return next(
+            (
+                bool(mapping.get("required", True))
+                for mapping in node.params.get("inputs", [])
+                if mapping.get("key") == port_key
+            ),
+            True,
+        )
+    ndef = NODE_REGISTRY.get(node.type_id)
+    if ndef is None:
+        return True
+    return next((port.required for port in ndef.inputs if port.key == port_key), True)
 
 
 def _unique(base: str, taken: set[str]) -> str:
@@ -48,7 +69,9 @@ def _unique(base: str, taken: set[str]) -> str:
     return f"{base}_{i}"
 
 
-def combine_nodes(graph: Graph, node_ids: list[str], label: str, new_pos: tuple[float, float] | None = None) -> NodeInstance:
+def combine_nodes(
+    graph: Graph, node_ids: list[str], label: str, new_pos: tuple[float, float] | None = None
+) -> NodeInstance:
     """Fold ``node_ids`` into one subworkflow node. Returns the new node."""
     selected = set(node_ids)
     missing = [nid for nid in selected if nid not in graph.nodes]
@@ -56,6 +79,11 @@ def combine_nodes(graph: Graph, node_ids: list[str], label: str, new_pos: tuple[
         raise ValueError(f"combine_nodes: unknown nodes {missing}")
     if len(selected) < 1:
         raise ValueError("combine_nodes: select at least one node")
+    loop_hits = [loop.name for loop in graph.loops if selected.intersection(loop.body)]
+    if loop_hits:
+        raise ValueError(
+            f"combine_nodes cannot fold loop members ({', '.join(loop_hits)}); expand the loop body first"
+        )
 
     inner_nodes = [copy.deepcopy(graph.nodes[nid]) for nid in node_ids]
     xs = [n.pos[0] for n in inner_nodes]
@@ -75,8 +103,14 @@ def combine_nodes(graph: Graph, node_ids: list[str], label: str, new_pos: tuple[
         key = _unique(link.to_port, taken)
         taken.add(key)
         inputs.append(
-            {"key": key, "dtype": _port_dtype_of(inner.type_id, link.to_port, "in"),
-             "label": link.to_port, "inner_node": link.to_node, "inner_port": link.to_port}
+            {
+                "key": key,
+                "dtype": _port_dtype_of(inner, link.to_port, "in"),
+                "label": link.to_port,
+                "required": _port_required_of(inner, link.to_port),
+                "inner_node": link.to_node,
+                "inner_port": link.to_port,
+            }
         )
     outputs: list[dict[str, Any]] = []
     taken = set()
@@ -85,10 +119,18 @@ def combine_nodes(graph: Graph, node_ids: list[str], label: str, new_pos: tuple[
         key = _unique(link.from_port, taken)
         taken.add(key)
         outputs.append(
-            {"key": key, "dtype": _port_dtype_of(inner.type_id, link.from_port, "out"),
-             "label": link.from_port, "inner_node": link.from_node, "inner_port": link.from_port}
+            {
+                "key": key,
+                "dtype": _port_dtype_of(inner, link.from_port, "out"),
+                "label": link.from_port,
+                "inner_node": link.from_node,
+                "inner_port": link.from_port,
+            }
         )
 
+    # Retain group definitions so expand is a genuine visual round-trip even
+    # when a group straddles the selection boundary.
+    saved_groups = [asdict(group) for group in graph.groups if selected.intersection(group.nodes)]
     # Drop selected nodes + every touching link, then add the combined node.
     keep = [l for l in graph.links if l.from_node not in selected and l.to_node not in selected]
     graph.links = keep
@@ -103,6 +145,7 @@ def combine_nodes(graph: Graph, node_ids: list[str], label: str, new_pos: tuple[
             "links": [asdict(l) for l in internal],
             "inputs": inputs,
             "outputs": outputs,
+            "groups": saved_groups,
         },
         pos=new_pos if new_pos is not None else (ox, oy),
     )
@@ -122,7 +165,13 @@ def build_inner_graph(inst: NodeInstance) -> Graph:
     for node_dict in inst.params.get("nodes", []):
         node_dict = dict(node_dict)
         node_dict["pos"] = tuple(node_dict.get("pos", (0.0, 0.0)))
-        inner.nodes[node_dict["id"]] = NodeInstance(**{k: node_dict[k] for k in ("id", "type_id", "params", "pos", "collapsed") if k in node_dict})
+        inner.nodes[node_dict["id"]] = NodeInstance(
+            **{
+                k: node_dict[k]
+                for k in ("id", "type_id", "params", "pos", "collapsed")
+                if k in node_dict
+            }
+        )
     for link_dict in inst.params.get("links", []):
         inner.links.append(Link(**link_dict))
     return inner
@@ -142,8 +191,14 @@ def describe_subworkflow(inst: NodeInstance) -> dict[str, Any]:
         "label": inst.params.get("label", "Subworkflow"),
         "nodes": len(inst.params.get("nodes", [])),
         "links": len(inst.params.get("links", [])),
-        "inputs": [(m["key"], m["dtype"], m["inner_node"], m["inner_port"]) for m in inst.params.get("inputs", [])],
-        "outputs": [(m["key"], m["dtype"], m["inner_node"], m["inner_port"]) for m in inst.params.get("outputs", [])],
+        "inputs": [
+            (m["key"], m["dtype"], m["inner_node"], m["inner_port"])
+            for m in inst.params.get("inputs", [])
+        ],
+        "outputs": [
+            (m["key"], m["dtype"], m["inner_node"], m["inner_port"])
+            for m in inst.params.get("outputs", [])
+        ],
         "titles": titles,
     }
 
@@ -169,16 +224,30 @@ def expand_subworkflow_node(graph: Graph, node_id: str) -> list[str]:
             id=remap[node_dict["id"]],
             type_id=node_dict["type_id"],
             params=copy.deepcopy(node_dict.get("params", {})),
-            pos=(node_dict.get("pos", (0, 0))[0] + inst.pos[0], node_dict.get("pos", (0, 0))[1] + inst.pos[1]),
+            pos=(
+                node_dict.get("pos", (0, 0))[0] + inst.pos[0],
+                node_dict.get("pos", (0, 0))[1] + inst.pos[1],
+            ),
             collapsed=bool(node_dict.get("collapsed", False)),
         )
         graph.nodes[restored.id] = restored
     for link_dict in inst.params.get("links", []):
-        graph.links.append(Link(remap[link_dict["from_node"]], link_dict["from_port"], remap[link_dict["to_node"]], link_dict["to_port"]))
+        graph.links.append(
+            Link(
+                remap[link_dict["from_node"]],
+                link_dict["from_port"],
+                remap[link_dict["to_node"]],
+                link_dict["to_port"],
+            )
+        )
 
     # Rewire boundary links back to inner endpoints.
-    in_map = {m["key"]: (remap[m["inner_node"]], m["inner_port"]) for m in inst.params.get("inputs", [])}
-    out_map = {m["key"]: (remap[m["inner_node"]], m["inner_port"]) for m in inst.params.get("outputs", [])}
+    in_map = {
+        m["key"]: (remap[m["inner_node"]], m["inner_port"]) for m in inst.params.get("inputs", [])
+    }
+    out_map = {
+        m["key"]: (remap[m["inner_node"]], m["inner_port"]) for m in inst.params.get("outputs", [])
+    }
     rewired: list[Link] = []
     for link in graph.links:
         if link.to_node == node_id and link.to_port in in_map:
@@ -191,4 +260,25 @@ def expand_subworkflow_node(graph: Graph, node_id: str) -> list[str]:
             rewired.append(link)
     graph.links = rewired
     del graph.nodes[node_id]
+    # Restore group membership captured when the subworkflow was created.
+    saved_groups = inst.params.get("groups", [])
+    existing = {group.name: group for group in graph.groups}
+    for group_dict in saved_groups:
+        name = str(group_dict.get("name", "group"))
+        members = [remap.get(member, member) for member in group_dict.get("nodes", [])]
+        members = [member for member in members if member in graph.nodes]
+        if name in existing:
+            group = existing[name]
+            group.nodes = list(dict.fromkeys([*group.nodes, *members]))
+        else:
+            from .graph import GroupDef
+
+            graph.groups.append(
+                GroupDef(
+                    name=name,
+                    title=str(group_dict.get("title", "Group")),
+                    nodes=members,
+                    color=str(group_dict.get("color", "slate")),
+                )
+            )
     return [remap[d["id"]] for d in inst.params.get("nodes", [])]

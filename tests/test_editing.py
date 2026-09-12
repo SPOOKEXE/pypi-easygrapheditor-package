@@ -173,18 +173,17 @@ def test_copy_paste_roundtrip_runs_equal():
     assert fresh.nodes[pasted[0]].pos[0] == g.nodes[n1.id].pos[0] + 40.0
     ex = Executor(fresh)
     assert ex.run_blocking().ok()
-    assert sorted(ex.outputs.values(), key=str)[-1] == {"out": 5.0}
+    assert max(ex.outputs.values(), key=str) == {"out": 5.0}
     with pytest.raises(ValueError, match="Unknown nodes"):
         copy_selection(g, ["ghost"])
 
 
 def test_port_value_preview():
     import numpy as np
-
     from easygrapheditor.engine.types import Field
     from easygrapheditor.ui.editing import port_value_preview
 
-    assert port_value_preview(None) == "—"
+    assert port_value_preview(None) == "none"
     assert port_value_preview(2.5) == "2.5"
     assert port_value_preview(True) == "True"
     assert port_value_preview("x" * 200).endswith("…")

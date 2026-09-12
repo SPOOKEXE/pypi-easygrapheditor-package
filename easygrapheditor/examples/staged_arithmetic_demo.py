@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from demo_runner import run_demo
 from easygrapheditor.engine import Cache, Executor, Graph
 
 
@@ -17,8 +18,8 @@ def build() -> tuple[Graph, dict[str, str]]:
     left = g.add_node("simulate.staged_task", params={"seconds": 0.4, "label": "left"}, pos=(0, 0))
     right = g.add_node("simulate.staged_task", params={"seconds": 0.6, "label": "right"}, pos=(0, 120))
     arith = g.add_node("maths.arithmetic", params={"operation": "add", "absolute": False}, pos=(300, 60))
-    g.add_link(left.id, "out", arith.id, "a")
-    g.add_link(right.id, "out", arith.id, "b")
+    g.add_link(left.id, "done", arith.id, "a")
+    g.add_link(right.id, "done", arith.id, "b")
     return g, {"left": left.id, "right": right.id, "arith": arith.id}
 
 
@@ -41,4 +42,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_demo(build=build, cli_main=main, title="Staged Arithmetic", description=__doc__ or "Staged arithmetic demo", script_path=__file__)

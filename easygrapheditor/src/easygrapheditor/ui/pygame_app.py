@@ -16,7 +16,7 @@ Canvas (ComfyUI-style):
 
 For embedding into your own game/app, call
 :func:`easygrapheditor.ui.adapters.pygame_register_grapheditor` with your
-screen Surface each frame — no loop is owned there.
+screen Surface each frame. No loop is owned there.
 """
 
 from __future__ import annotations
@@ -62,10 +62,11 @@ def _near(points: list, pos: tuple[int, int], radius: int = 9) -> tuple | None:
 
 def run_pygame(
     state: EditorState | GraphAdapter,
-    size: tuple[int, int] = (1100, 700),
+    size: tuple[int, int] = (1440, 820),
     title: str = "Graph Editor",
     autorun: bool = True,
     max_frames: int = 0,
+    editable: bool = True,
 ) -> GraphAdapter:
     """Open the live editor window (see module docstring for controls).
 
@@ -78,6 +79,7 @@ def run_pygame(
         raise ImportError("Install the pygame extra: pip install 'easygrapheditor[pygame]'") from e
 
     adapter = GraphAdapter.from_any(state)
+    adapter.state.load_desktop_settings()
     if autorun and adapter.report is None:
         adapter.run()
     pygame.init()
@@ -85,12 +87,35 @@ def run_pygame(
     pygame.display.set_caption(title)
     clock = pygame.time.Clock()
     style = PygameStyle()
-    graph_w = int(size[0] * 0.62)
+    graph_w = int(size[0] * 0.72)
 
-    live = False
+    live = adapter.state.live
     msg = ""
-    view = [0.0, 0.0, 1.0]  # ox, oy, zoom
+    view = [adapter.state.viewport.x, adapter.state.viewport.y, adapter.state.viewport.zoom]
+    initial_area = pygame.Rect(12, 46, graph_w - 24, size[1] - 58)
+    if view == [0.0, 0.0, 1.0] and adapter.state.graph.nodes:
+        initial_boxes = compute_boxes(adapter.state.graph, initial_area, style)
+        bounds = next(iter(initial_boxes.values())).copy()
+        for box in initial_boxes.values():
+            bounds.union_ip(box)
+        usable = pygame.Rect(initial_area.x + 24, initial_area.y + 44, initial_area.width - 48, initial_area.height - 82)
+        overflows = (
+            bounds.x < initial_area.x
+            or bounds.y < initial_area.y
+            or bounds.right > usable.right
+            or bounds.bottom > usable.bottom
+        )
+        if overflows:
+            scale = min(1.0, usable.width / max(1, bounds.width), usable.height / max(1, bounds.height))
+            scale = max(0.35, scale)
+            view[:] = [
+                usable.x - (bounds.x - initial_area.x) * scale,
+                usable.y - (bounds.y - initial_area.y) * scale,
+                scale,
+            ]
     dragging: dict[str, tuple[int, int]] = {}
+    drag_start: tuple[int, int] | None = None
+    drag_positions: dict[str, tuple[float, float]] = {}
     wiring: tuple[str, str] | None = None
     wire_pos: tuple[int, int] = (0, 0)
     marquee: tuple[int, int] | None = None
@@ -102,8 +127,8 @@ def run_pygame(
     clipboard: dict | None = None
 
     def buttons() -> dict[str, Any]:
-        labels = ["Run", f"Live:{'on' if live else 'off'}", "Clear", "+Add"]
-        widths = [70, 90, 80, 70]
+        labels = ["Run", f"Live:{'on' if live else 'off'}", "Clear", "+Add", "Tab+", "Tab<", "Tab>"]
+        widths = [70, 90, 80, 70, 58, 58, 58]
         rects, x = {}, 12
         for label, w in zip(labels, widths):
             rects[label.split(":")[0]] = pygame.Rect(x, 8, w, 30)
@@ -131,11 +156,23 @@ def run_pygame(
     while running:
         graph_area = pygame.Rect(12, 46, graph_w - 24, size[1] - 58)
         insp_area = pygame.Rect(graph_w, 46, size[0] - graph_w - 12, size[1] - 58)
-        boxes = compute_boxes(adapter.state.graph, graph_area, style, offsets=adapter.state.drag_offsets, view=tuple(view))
+        active_offsets = {nid: adapter.state.drag_offsets.get(nid, (0.0, 0.0)) for nid in dragging}
+        boxes = compute_boxes(adapter.state.graph, graph_area, style, offsets=active_offsets,
+                              view=tuple(view), apply_offsets=bool(dragging))
         ins, outs = port_anchors(adapter.state.graph, boxes)
         btns = buttons()
 
         for event in pygame.event.get():
+            if not editable and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if btns["Run"].collidepoint(event.pos):
+                    adapter.start_run()
+                continue
+            if not editable and event.type == pygame.KEYDOWN and event.key not in (
+                pygame.K_q,
+                pygame.K_r,
+                pygame.K_f,
+            ):
+                continue
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (2, 3):
@@ -164,19 +201,31 @@ def run_pygame(
                 pos = event.pos
                 hit_btn = next((k for k, r in btns.items() if not k.startswith("_") and r.collidepoint(pos)), None)
                 if hit_btn == "Run":
-                    adapter.run()
+                    adapter.start_run()
                     msg = "ran graph"
                 elif hit_btn == "Live":
                     live = not live
                     msg = f"live {'on' if live else 'off'}"
                 elif hit_btn == "Clear":
                     adapter.clear_cache()
-                    adapter.run()
+                    adapter.start_run(force=True)
                     msg = "cache cleared + reran"
                 elif hit_btn == "+Add":
                     library_open, placing = True, None
+                elif hit_btn == "Tab+":
+                    adapter.new_tab(f"Graph {len(adapter.state.tabs) + 1}")
+                    view[:] = [adapter.state.viewport.x, adapter.state.viewport.y, adapter.state.viewport.zoom]
+                    msg = "new graph tab"
+                elif hit_btn == "Tab<":
+                    adapter.switch_tab((adapter.state.active_tab - 1) % len(adapter.state.tabs))
+                    view[:] = [adapter.state.viewport.x, adapter.state.viewport.y, adapter.state.viewport.zoom]
+                    msg = f"tab {adapter.state.active_tab + 1}/{len(adapter.state.tabs)}"
+                elif hit_btn == "Tab>":
+                    adapter.switch_tab((adapter.state.active_tab + 1) % len(adapter.state.tabs))
+                    view[:] = [adapter.state.viewport.x, adapter.state.viewport.y, adapter.state.viewport.zoom]
+                    msg = f"tab {adapter.state.active_tab + 1}/{len(adapter.state.tabs)}"
                 elif library_open:
-                    picked = _library_click(node_type_choices(), lib_rect(graph_area), pos, lib_scroll)
+                    picked = _library_click(node_type_choices(adapter.state.allowed_node_types), lib_rect(graph_area), pos, lib_scroll)
                     if picked == "__close__":
                         library_open = False
                     elif picked:
@@ -185,8 +234,8 @@ def run_pygame(
                 elif placing:
                     from .editing import add_node_at
 
-                    inst = add_node_at(adapter.state.graph, placing, pos=(float(pos[0]), float(pos[1])))
-                    adapter.mark_dirty()
+                    type_id, node_pos = placing, (float(pos[0]), float(pos[1]))
+                    inst = adapter.mutate("add node", lambda type_id=type_id, node_pos=node_pos: add_node_at(adapter.state.graph, type_id, pos=node_pos), live=live)
                     msg = f"added {inst.id}"
                     placing = None
                     if live:
@@ -203,9 +252,8 @@ def run_pygame(
                         hit = _near([(p, x, y) for p, x, y, _ in anchors], pos)
                         if hit and any(l.to_node == nid and l.to_port == hit[0] for l in adapter.state.graph.links):
                             src = next(l for l in adapter.state.graph.links if l.to_node == nid and l.to_port == hit[0])
-                            for l in [x for x in adapter.state.graph.links if x.to_node == nid and x.to_port == hit[0]]:
-                                disconnect(adapter.state.graph, l.from_node, l.from_port, l.to_node, l.to_port)
-                            adapter.mark_dirty()
+                            links = [x for x in adapter.state.graph.links if x.to_node == nid and x.to_port == hit[0]]
+                            adapter.mutate("disconnect nodes", lambda links=links: [disconnect(adapter.state.graph, l.from_node, l.from_port, l.to_node, l.to_port) for l in links], live=live)
                             rerouted = (src.from_node, src.from_port)
                             msg = "rerouting link"
                             break
@@ -234,6 +282,13 @@ def run_pygame(
                             else:
                                 adapter.state.selection = [hit]
                             members = _move_set(adapter, hit, bool(shift))
+                            # Offsets are per-drag transient values. Keep the
+                            # latest one for diagnostics after release, but do
+                            # not let a previous drag move a node again.
+                            for nid in members:
+                                adapter.state.drag_offsets[nid] = (0.0, 0.0)
+                            drag_start = pos
+                            drag_positions = {nid: adapter.state.graph.nodes[nid].pos for nid in members}
                             dragging = {nid: (pos[0] - boxes[nid].x, pos[1] - boxes[nid].y) for nid in members}
             elif event.type == pygame.MOUSEMOTION:
                 mouse_pos = event.pos
@@ -249,27 +304,19 @@ def run_pygame(
                 elif marquee:
                     pass  # end set on button-up
                 elif dragging:
-                    # each grabbed node follows its own grab point (formation preserved)
                     k = view[2]
-                    for nid, (dx, dy) in dragging.items():
-                        base = base_box(nid, graph_area)
-                        lx = (base.x - graph_area.x - view[0]) / k
-                        ly = (base.y - graph_area.y - view[1]) / k
-                        adapter.state.drag_offsets[nid] = (
-                            (event.pos[0] - dx - graph_area.x - view[0]) / k - lx,
-                            (event.pos[1] - dy - graph_area.y - view[1]) / k - ly,
-                        )
+                    start_x, start_y = drag_start or event.pos
+                    delta = ((event.pos[0] - start_x) / k, (event.pos[1] - start_y) / k)
+                    for nid in dragging:
+                        adapter.state.drag_offsets[nid] = delta
             elif event.type == pygame.MOUSEBUTTONUP and event.button in (2, 3):
                 if panning and event.button == 3:
                     _px, _py, _sx, _sy, moved, target = panning
                     if not moved and target:
                         nid, port = target
                         n = sum(1 for l in adapter.state.graph.links if l.to_node == nid and l.to_port == port)
-                        adapter.state.graph.links = [l for l in adapter.state.graph.links if not (l.to_node == nid and l.to_port == port)]
-                        adapter.mark_dirty()
+                        adapter.mutate("disconnect nodes", lambda nid=nid, port=port: setattr(adapter.state.graph, "links", [l for l in adapter.state.graph.links if not (l.to_node == nid and l.to_port == port)]), live=live)
                         msg = f"unplugged {n} link(s) into {nid}.{port}"
-                        if live:
-                            adapter.run()
                 panning = None
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if wiring:
@@ -281,11 +328,9 @@ def run_pygame(
                             break
                     if target:
                         try:
-                            link = connect(adapter.state.graph, wiring[0], wiring[1], target[0], target[1])
-                            adapter.mark_dirty()
+                            source, destination = wiring, target
+                            link = adapter.mutate("connect nodes", lambda source=source, destination=destination: connect(adapter.state.graph, source[0], source[1], destination[0], destination[1]), live=live)
                             msg = f"connected {link.from_node}.{link.from_port} -> {link.to_node}.{link.to_port}"
-                            if live:
-                                adapter.run()
                         except ValueError as e:
                             msg = f"rejected: {e}"
                     wiring = None
@@ -298,9 +343,27 @@ def run_pygame(
                     msg = f"selected {len(adapter.state.selection)}"
                     marquee = None
                 elif dragging:
+                    # Drag offsets make movement smooth during an immediate
+                    # mode frame. Commit the same displacement to NodeInstance
+                    # positions on release so native saves and web views agree.
+                    moved = dict(adapter.state.drag_offsets)
+                    if moved:
+                        dragged_ids = list(dragging)
+                        origins = dict(drag_positions)
+                        def commit(ids: list[str] = dragged_ids, offsets: dict[str, tuple[float, float]] = moved,
+                                   starts: dict[str, tuple[float, float]] = origins) -> None:
+                            for nid in ids:
+                                inst = adapter.state.graph.nodes.get(nid)
+                                if inst is None:
+                                    continue
+                                dx, dy = offsets.get(nid, (0.0, 0.0))
+                                sx, sy = starts[nid]
+                                inst.pos = (sx + dx, sy + dy)
+                        adapter.state.apply("move nodes", commit, debounce_live=False, affects_execution=False)
                     dragging = {}
-                    if live:
-                        adapter.run()
+                    drag_start = None
+                    drag_positions = {}
+                    adapter.consume_live_run()
             elif event.type == pygame.KEYDOWN:
                 ctrl = _ctrl(event)
                 factor = 10.0 if _shift(event) else 1.0
@@ -310,10 +373,11 @@ def run_pygame(
                     else:
                         running = False
                 elif event.key == pygame.K_r:
-                    adapter.run()
+                    adapter.start_run()
                     msg = "ran graph"
                 elif event.key == pygame.K_l:
                     live = not live
+                    adapter.state.live = live
                     msg = f"live {'on' if live else 'off'}"
                 elif event.key == pygame.K_c and ctrl:
                     if adapter.state.selection:
@@ -325,14 +389,12 @@ def run_pygame(
                     if clipboard:
                         from .editing import paste_clipboard
 
-                        adapter.state.selection = paste_clipboard(adapter.state.graph, clipboard)
-                        adapter.mark_dirty()
+                        clip = clipboard
+                        adapter.state.selection = adapter.mutate("paste nodes", lambda clip=clip: paste_clipboard(adapter.state.graph, clip), live=live)
                         msg = f"pasted {len(adapter.state.selection)} node(s)"
-                        if live:
-                            adapter.run()
                 elif event.key == pygame.K_c:
                     adapter.clear_cache()
-                    adapter.run()
+                    adapter.start_run(force=True)
                     msg = "cache cleared + reran"
                 elif event.key == pygame.K_n:
                     library_open = not library_open
@@ -341,7 +403,7 @@ def run_pygame(
                         from .editing import group_nodes
 
                         try:
-                            grp = group_nodes(adapter.state.graph, adapter.state.selection, f"Group {len(adapter.state.graph.groups) + 1}")
+                            grp = adapter.mutate("group nodes", lambda: group_nodes(adapter.state.graph, adapter.state.selection, f"Group {len(adapter.state.graph.groups) + 1}"), live=live)
                             msg = f"grouped {len(grp.nodes)} nodes"
                         except ValueError as e:
                             msg = str(e)
@@ -353,18 +415,18 @@ def run_pygame(
                         from .editing import ungroup
 
                         for name in names:
-                            ungroup(adapter.state.graph, name)
+                            adapter.mutate("ungroup nodes", lambda name=name: ungroup(adapter.state.graph, name), live=live)
                         msg = f"ungrouped {len(names)}"
                     else:
                         msg = "selection is in no group"
                 elif event.key == pygame.K_f:
-                    view[0], view[1], view[2] = 0.0, 0.0, 1.0
-                    msg = "view reset"
+                    adapter.state.fit_view(float(graph_area.width), float(graph_area.height))
+                    view[0], view[1], view[2] = adapter.state.viewport.x, adapter.state.viewport.y, adapter.state.viewport.zoom
+                    msg = "fit canvas"
                 elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE):
                     if adapter.state.selection:
-                        remove_nodes(adapter.state.graph, adapter.state.selection)
+                        adapter.mutate("delete nodes", lambda: remove_nodes(adapter.state.graph, adapter.state.selection), live=live)
                         adapter.state.selection = []
-                        adapter.mark_dirty()
                         msg = "deleted selection"
                         if live:
                             adapter.run()
@@ -382,10 +444,12 @@ def run_pygame(
         compat: set[tuple[str, str]] = set()
         if wiring:
             compat = {(nid, port) for nid, port in compatible_inputs(adapter.state.graph, wiring[0], wiring[1])}
-        screen.fill((12, 14, 18))
+        screen.fill((0, 0, 0))
         _draw_bar(screen, btns, msg, style, live)
-        pygame_register_grapheditor(screen, adapter, rect=graph_area, style=style, title=title,
-                                    offsets=adapter.state.drag_offsets, view=tuple(view), highlight=compat)
+        pygame_register_grapheditor(screen, adapter, rect=graph_area, style=style, title=f"{title} [{adapter.state.active_tab + 1}/{len(adapter.state.tabs)}]",
+                                    offsets={nid: adapter.state.drag_offsets.get(nid, (0.0, 0.0)) for nid in dragging},
+                                    view=tuple(view), highlight=compat,
+                                    apply_offsets=bool(dragging))
         if wiring:
             import pygame as _pg
 
@@ -397,17 +461,19 @@ def run_pygame(
             _pg.draw.rect(screen, (140, 180, 240), pygame.Rect(min(x0, mouse_pos[0]), min(y0, mouse_pos[1]),
                                                               abs(mouse_pos[0] - x0), abs(mouse_pos[1] - y0)), 1)
         if library_open:
-            _draw_library(screen, lib_rect(graph_area), node_type_choices(), lib_scroll, style)
+            _draw_library(screen, lib_rect(graph_area), node_type_choices(adapter.state.allowed_node_types), lib_scroll, style)
         _draw_tooltip(screen, adapter, boxes, ins, outs, mouse_pos, wiring, style)
         _draw_minimap(screen, adapter, graph_area, style, tuple(view))
         pygame_draw_inspector(screen, adapter, insp_area, style)
         pygame.display.flip()
         adapter.state.viewport.x, adapter.state.viewport.y, adapter.state.viewport.zoom = view[0], view[1], view[2]
+        adapter.consume_live_run()
         clock.tick(30)
         frames += 1
         if max_frames and frames >= max_frames:
             running = False
     pygame.quit()
+    adapter.state.save_desktop_settings()
     return adapter
 
 
@@ -458,11 +524,27 @@ def _draw_minimap(screen: Any, adapter: GraphAdapter, area: Any, style: PygameSt
     mm = minimap_rect(area)
     pygame.draw.rect(screen, (22, 25, 33), mm, border_radius=6)
     pygame.draw.rect(screen, (70, 76, 90), mm, 1, border_radius=6)
-    mini = _boxes(adapter.state.graph, mm, style)
-    for nid, rect in mini.items():
+    raw = _boxes(adapter.state.graph, pygame.Rect(0, 0, max(area.width, 1), max(area.height, 1)), style)
+    if not raw:
+        return
+    bounds = next(iter(raw.values())).copy()
+    for rect in raw.values():
+        bounds.union_ip(rect)
+    inner = pygame.Rect(mm.x + 8, mm.y + 20, mm.width - 16, mm.height - 28)
+    scale = min(inner.width / max(1, bounds.width), inner.height / max(1, bounds.height))
+    old_clip = screen.get_clip()
+    screen.set_clip(mm)
+    for nid, source in raw.items():
+        rect = pygame.Rect(
+            inner.x + round((source.x - bounds.x) * scale),
+            inner.y + round((source.y - bounds.y) * scale),
+            max(3, round(source.width * scale)),
+            max(3, round(source.height * scale)),
+        )
         rep = adapter.report.per_node.get(nid) if adapter.report else None
         color = style.idle if rep is None else (style.ok if rep.status in ("ok", "cached") else style.err)
         pygame.draw.rect(screen, color, rect, border_radius=1)
+    screen.set_clip(old_clip)
     _ = view
     screen.blit(_render_text(_make_font(11), "overview", style.dim), (mm.x + 6, mm.y + 4))
 
@@ -528,7 +610,7 @@ def _draw_bar(screen: Any, btns: dict, msg: str, style: PygameStyle, live: bool)
 
     font = _make_font(14)
     small = _make_font(12)
-    static = {"Run": "Run [R]", "Clear": "Clear [C]", "+Add": "+Add [N]"}
+    static = {"Run": "Run [R]", "Clear": "Clear [C]", "+Add": "+Add [N]", "Tab+": "Tab+", "Tab<": "Tab<", "Tab>": "Tab>"}
     for key, rect in btns.items():
         if key.startswith("_"):
             continue
@@ -569,8 +651,7 @@ def _selected_param(adapter: GraphAdapter, kinds: tuple[str, ...]) -> Any:
 
 
 def _tweak_and_maybe_run(adapter: GraphAdapter, direction: int, factor: float, live: bool) -> None:
-    if pygame_adjust_selected(adapter, direction, factor) is not None and live:
-        adapter.run()
+    adapter.mutate("adjust parameter", lambda: pygame_adjust_selected(adapter, direction, factor), live=live)
 
 
 def _flip_first(adapter: GraphAdapter, kinds: tuple[str, ...], live: bool) -> None:
@@ -578,9 +659,8 @@ def _flip_first(adapter: GraphAdapter, kinds: tuple[str, ...], live: bool) -> No
     if found is None:
         return
     inst, pdef = found
-    inst.params[pdef.key] = adjust_param_value(pdef, inst.params.get(pdef.key, pdef.default), +1)
-    if live:
-        adapter.run()
+    adapter.state.set_param(inst.id, pdef.key, adjust_param_value(pdef, inst.params.get(pdef.key, pdef.default), +1))
+    adapter.mark_dirty()
 
 
 def _expand_selected(adapter: GraphAdapter, live: bool) -> bool:
@@ -590,8 +670,6 @@ def _expand_selected(adapter: GraphAdapter, live: bool) -> bool:
     inst = adapter.state.graph.nodes.get(nid)
     if inst is not None and inst.type_id == "core.subworkflow":
         adapter.expand_subworkflow(nid)
-        if live:
-            adapter.run()
         return True
     return False
 

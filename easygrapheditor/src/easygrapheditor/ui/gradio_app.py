@@ -19,6 +19,19 @@ def build_gradio_app(state: EditorState | GraphAdapter, title: str = "Graph Edit
         import gradio as gr
     except ImportError as e:
         raise ImportError("Install the gradio extra: pip install 'easygrapheditor[gradio]'") from e
-    blocks = gr.Blocks(title=title)
+    theme = gr.themes.Base().set(
+        body_background_fill="#000000",
+        body_text_color="#ffffff",
+        background_fill_primary="#000000",
+        background_fill_secondary="#0c0c0c",
+        block_background_fill="#000000",
+        panel_background_fill="#000000",
+        input_background_fill="#000000",
+        button_secondary_background_fill="#111111",
+        button_secondary_text_color="#ffffff",
+        border_color_primary="#303030",
+        block_border_color="#303030",
+    )
+    blocks = gr.Blocks(title=title, theme=theme)
     gradio_register_grapheditor(blocks, state, title=title, **opts)
     return blocks

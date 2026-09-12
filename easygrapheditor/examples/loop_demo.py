@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from demo_runner import run_demo
 from easygrapheditor.engine import Cache, Executor, Graph
 
 
@@ -48,4 +49,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_demo(build=build, cli_main=main, title="Loop", description=__doc__ or "Loop demo", script_path=__file__)

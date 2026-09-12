@@ -1,25 +1,22 @@
 [project]
 name = "easygrapheditor"
-version = "0.1.0"
-description = "Easily create graph editors using this package."
+version = "0.2.0"
+description = "A Python-first node graph engine with embeddable editors."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "easygrapheditor" }]
 keywords = ["graph", "node-editor", "comfyui", "gradio", "streamlit", "pygame"]
 dependencies = [
-  "gradio>=6.26.0",
   "numpy>=1.24",
   "pillow>=10.0",
-  "pygame>=2.6.1",
-  "streamlit>=1.63.0",
 ]
 
 [project.optional-dependencies]
-gradio = ["gradio>=4.0"]
-streamlit = ["streamlit>=1.30"]
+gradio = ["gradio>=6.26"]
+streamlit = ["streamlit>=1.63"]
 pygame = ["pygame>=2.5"]
-all = ["gradio>=4.0", "streamlit>=1.30", "pygame>=2.5"]
+all = ["gradio>=6.26", "streamlit>=1.63", "pygame>=2.5"]
 dev = ["pytest>=8.0", "ruff>=0.4"]
 
 [project.urls]

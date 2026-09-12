@@ -52,8 +52,12 @@ class GroupDef:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> GroupDef:
-        return cls(name=str(d.get("name", "group")), title=str(d.get("title", "Group")),
-                   nodes=list(d.get("nodes", [])), color=str(d.get("color", "slate")))
+        return cls(
+            name=str(d.get("name", "group")),
+            title=str(d.get("title", "Group")),
+            nodes=list(d.get("nodes", [])),
+            color=str(d.get("color", "slate")),
+        )
 
 
 class Graph:
@@ -63,13 +67,23 @@ class Graph:
         self.loops: list[LoopDef] = []
         self.groups: list[GroupDef] = []
 
-    def add_loop(self, name: str, body: list[str], condition: str, max_iterations: int = DEFAULT_MAX_ITERATIONS) -> LoopDef:
-        loop = LoopDef(name=name, body=list(body), condition=condition, max_iterations=max_iterations)
+    def add_loop(
+        self,
+        name: str,
+        body: list[str],
+        condition: str,
+        max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    ) -> LoopDef:
+        loop = LoopDef(
+            name=name, body=list(body), condition=condition, max_iterations=max_iterations
+        )
         self.loops.append(loop)
         return loop
 
     def add_group(self, title: str, nodes: list[str], color: str = "slate") -> GroupDef:
-        group = GroupDef(name=f"group_{len(self.groups) + 1}", title=title, nodes=list(nodes), color=color)
+        group = GroupDef(
+            name=f"group_{len(self.groups) + 1}", title=title, nodes=list(nodes), color=color
+        )
         self.groups.append(group)
         return group
 
@@ -85,8 +99,12 @@ class Graph:
             group.nodes = [nid for nid in group.nodes if nid not in removed]
         self.groups = [g for g in self.groups if len(g.nodes) >= 2]
 
-    def add_node(self, type_id: str, params: dict[str, Any] | None = None,
-                 pos: tuple[float, float] = (0.0, 0.0)) -> NodeInstance:
+    def add_node(
+        self,
+        type_id: str,
+        params: dict[str, Any] | None = None,
+        pos: tuple[float, float] = (0.0, 0.0),
+    ) -> NodeInstance:
         nid = f"{type_id.split('.')[-1]}_{uuid.uuid4().hex[:6]}"
         inst = NodeInstance(id=nid, type_id=type_id, params=params or {}, pos=pos)
         self.nodes[nid] = inst
@@ -123,6 +141,7 @@ class Graph:
                 errors.extend(self._validate_inner(nid, inst, depth=0))
             elif inst.type_id not in NODE_REGISTRY:
                 errors.append(ValidationError(nid, f"Unknown node type: {inst.type_id}"))
+        incoming: dict[tuple[str, str], int] = {}
         for link in self.links:
             if link.from_node not in self.nodes or link.to_node not in self.nodes:
                 errors.append(ValidationError(None, f"Dangling link: {link}"))
@@ -132,13 +151,55 @@ class Graph:
             if out_dt is None or in_dt is None:
                 errors.append(ValidationError(link.to_node, f"Unknown port in link: {link}"))
             elif not can_connect(out_dt, in_dt):
-                errors.append(ValidationError(link.to_node, f"Type mismatch {out_dt} -> {in_dt}: {link}"))
+                errors.append(
+                    ValidationError(link.to_node, f"Type mismatch {out_dt} -> {in_dt}: {link}")
+                )
+            endpoint = (link.to_node, link.to_port)
+            incoming[endpoint] = incoming.get(endpoint, 0) + 1
+        for (nid, port), count in incoming.items():
+            if count > 1:
+                errors.append(
+                    ValidationError(
+                        nid, f"Input '{port}' has {count} incoming links; fan-in is not supported"
+                    )
+                )
+        for nid, inst in self.nodes.items():
+            if inst.type_id == SUBWORKFLOW_TYPE_ID:
+                for mapping in inst.params.get("inputs", []):
+                    if mapping.get("required", True) and (nid, mapping.get("key")) not in incoming:
+                        errors.append(
+                            ValidationError(
+                                nid,
+                                f"Required subworkflow input '{mapping.get('key')}' is not connected",
+                            )
+                        )
+                continue
+            ndef = NODE_REGISTRY.get(inst.type_id)
+            if ndef is None:
+                continue
+            for port in ndef.inputs:
+                if port.required and (nid, port.key) not in incoming:
+                    errors.append(
+                        ValidationError(nid, f"Required input '{port.key}' is not connected")
+                    )
+        for group in self.groups:
+            for nid in group.nodes:
+                if nid not in self.nodes:
+                    errors.append(
+                        ValidationError(
+                            nid, f"group '{group.name}' references missing node '{nid}'"
+                        )
+                    )
         # Cycle detection (DFS). Feedback links (accumulate.next) are exempt:
         # they carry previous-iteration values, never current-pass data.
         type_of = lambda nid: self.nodes[nid].type_id if nid in self.nodes else None
         adj: dict[str, list[str]] = {nid: [] for nid in self.nodes}
         for link in self.links:
-            if link.from_node in adj and link.to_node in adj and not is_feedback_link(link, type_of):
+            if (
+                link.from_node in adj
+                and link.to_node in adj
+                and not is_feedback_link(link, type_of)
+            ):
                 adj[link.from_node].append(link.to_node)
         visiting: set[str] = set()
         visited: set[str] = set()
@@ -158,10 +219,14 @@ class Graph:
         for nid in self.nodes:
             if nid not in visited:
                 dfs(nid, [nid])
-        errors.extend(validate_loops(self, lambda nid: self.nodes[nid].type_id if nid in self.nodes else None))
+        errors.extend(
+            validate_loops(self, lambda nid: self.nodes[nid].type_id if nid in self.nodes else None)
+        )
         return errors
 
-    def _validate_inner(self, outer_id: str, inst: NodeInstance, depth: int) -> list[ValidationError]:
+    def _validate_inner(
+        self, outer_id: str, inst: NodeInstance, depth: int
+    ) -> list[ValidationError]:
         """Recursively validate a subworkflow's inner nodes/links (depth-guarded)."""
         errors: list[ValidationError] = []
         if depth > 64:
@@ -170,7 +235,9 @@ class Graph:
 
         def inner_dtype(node_dict: dict, port_key: str, direction: str) -> str | None:
             if node_dict.get("type_id") == SUBWORKFLOW_TYPE_ID:
-                maps = node_dict.get("params", {}).get("inputs" if direction == "in" else "outputs", [])
+                maps = node_dict.get("params", {}).get(
+                    "inputs" if direction == "in" else "outputs", []
+                )
                 for mapping in maps:
                     if mapping.get("key") == port_key:
                         return str(mapping.get("dtype", "data.ANY"))
@@ -183,29 +250,151 @@ class Graph:
                     return port.dtype
             return None
 
+        def inner_inputs(node_dict: dict) -> list[tuple[str, bool]]:
+            """Required input contract for ordinary and nested subflow nodes."""
+            if node_dict.get("type_id") == SUBWORKFLOW_TYPE_ID:
+                return [
+                    (str(mapping.get("key", "")), bool(mapping.get("required", True)))
+                    for mapping in node_dict.get("params", {}).get("inputs", [])
+                ]
+            ndef = NODE_REGISTRY.get(node_dict.get("type_id", ""))
+            return [] if ndef is None else [(port.key, port.required) for port in ndef.inputs]
+
         for inner_id, node_dict in inner_nodes.items():
             tid = node_dict.get("type_id", "")
             if tid == SUBWORKFLOW_TYPE_ID:
-                nested = NodeInstance(id=inner_id, type_id=tid, params=node_dict.get("params", {}),
-                                      pos=tuple(node_dict.get("pos", (0.0, 0.0))))
+                nested = NodeInstance(
+                    id=inner_id,
+                    type_id=tid,
+                    params=node_dict.get("params", {}),
+                    pos=tuple(node_dict.get("pos", (0.0, 0.0))),
+                )
                 errors.extend(self._validate_inner(f"{outer_id}/{inner_id}", nested, depth + 1))
             elif tid not in NODE_REGISTRY:
-                errors.append(ValidationError(outer_id, f"subworkflow '{outer_id}' has unknown inner type: {tid}"))
+                errors.append(
+                    ValidationError(
+                        outer_id, f"subworkflow '{outer_id}' has unknown inner type: {tid}"
+                    )
+                )
         for link_dict in inst.params.get("links", []):
-            src, dst = inner_nodes.get(link_dict.get("from_node", "")), inner_nodes.get(link_dict.get("to_node", ""))
+            src, dst = (
+                inner_nodes.get(link_dict.get("from_node", "")),
+                inner_nodes.get(link_dict.get("to_node", "")),
+            )
             if src is None or dst is None:
-                errors.append(ValidationError(outer_id, f"subworkflow '{outer_id}' has dangling inner link: {link_dict}"))
+                errors.append(
+                    ValidationError(
+                        outer_id, f"subworkflow '{outer_id}' has dangling inner link: {link_dict}"
+                    )
+                )
                 continue
             out_dt = inner_dtype(src, link_dict.get("from_port", ""), "out")
             in_dt = inner_dtype(dst, link_dict.get("to_port", ""), "in")
             if out_dt is None or in_dt is None:
-                errors.append(ValidationError(outer_id, f"subworkflow '{outer_id}' has unknown inner port: {link_dict}"))
+                errors.append(
+                    ValidationError(
+                        outer_id, f"subworkflow '{outer_id}' has unknown inner port: {link_dict}"
+                    )
+                )
             elif not can_connect(out_dt, in_dt):
-                errors.append(ValidationError(outer_id, f"subworkflow '{outer_id}' type mismatch {out_dt} -> {in_dt}"))
-        # Port maps must point at real inner endpoints.
-        for mapping in list(inst.params.get("inputs", [])) + list(inst.params.get("outputs", [])):
-            if mapping.get("inner_node") not in inner_nodes:
-                errors.append(ValidationError(outer_id, f"subworkflow '{outer_id}' maps missing node: {mapping}"))
+                errors.append(
+                    ValidationError(
+                        outer_id, f"subworkflow '{outer_id}' type mismatch {out_dt} -> {in_dt}"
+                    )
+                )
+        mapped_inputs = {
+            (mapping.get("inner_node"), mapping.get("inner_port"))
+            for mapping in inst.params.get("inputs", [])
+        }
+        incoming: dict[tuple[str, str], int] = {}
+        for link_dict in inst.params.get("links", []):
+            endpoint = (link_dict.get("to_node"), link_dict.get("to_port"))
+            incoming[endpoint] = incoming.get(endpoint, 0) + 1
+        for endpoint, count in incoming.items():
+            if count > 1:
+                errors.append(
+                    ValidationError(
+                        outer_id,
+                        f"subworkflow '{outer_id}' input '{endpoint[1]}' has duplicate fan-in",
+                    )
+                )
+        for inner_id, node_dict in inner_nodes.items():
+            for port_key, required in inner_inputs(node_dict):
+                endpoint = (inner_id, port_key)
+                if required and endpoint not in incoming and endpoint not in mapped_inputs:
+                    errors.append(
+                        ValidationError(
+                            outer_id,
+                            f"subworkflow '{outer_id}' required input '{inner_id}.{port_key}' is not connected",
+                        )
+                    )
+        # Inner cycles are not visible to the outer graph's DFS.
+        adj: dict[str, list[str]] = {nid: [] for nid in inner_nodes}
+        for link_dict in inst.params.get("links", []):
+            src, dst = link_dict.get("from_node"), link_dict.get("to_node")
+            if src in adj and dst in adj:
+
+                class _Link:
+                    from_node = src
+                    to_node = dst
+                    from_port = link_dict.get("from_port")
+                    to_port = link_dict.get("to_port")
+
+                if not is_feedback_link(
+                    _Link(), lambda node_id: inner_nodes[node_id].get("type_id")
+                ):
+                    adj[src].append(dst)
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(nid: str) -> bool:
+            visiting.add(nid)
+            for nxt in adj[nid]:
+                if nxt in visiting:
+                    errors.append(
+                        ValidationError(outer_id, f"subworkflow '{outer_id}' has an inner cycle")
+                    )
+                    return True
+                if nxt not in visited and visit(nxt):
+                    return True
+            visiting.remove(nid)
+            visited.add(nid)
+            return False
+
+        for inner_id in inner_nodes:
+            if inner_id not in visited:
+                visit(inner_id)
+        # Port maps must point at real inner endpoints and faithfully retain
+        # the dtype when a nested subflow is folded into another one.
+        for direction, mappings in (
+            ("in", inst.params.get("inputs", [])),
+            ("out", inst.params.get("outputs", [])),
+        ):
+            for mapping in mappings:
+                inner_node = mapping.get("inner_node")
+                if inner_node not in inner_nodes:
+                    errors.append(
+                        ValidationError(
+                            outer_id, f"subworkflow '{outer_id}' maps missing node: {mapping}"
+                        )
+                    )
+                    continue
+                actual = inner_dtype(
+                    inner_nodes[inner_node], mapping.get("inner_port", ""), direction
+                )
+                if actual is None:
+                    errors.append(
+                        ValidationError(
+                            outer_id, f"subworkflow '{outer_id}' maps missing port: {mapping}"
+                        )
+                    )
+                elif str(mapping.get("dtype", actual)) != actual:
+                    errors.append(
+                        ValidationError(
+                            outer_id,
+                            f"subworkflow '{outer_id}' map dtype {mapping.get('dtype')} does not match {actual}",
+                        )
+                    )
         return errors
 
     def topo_order(self) -> list[str]:
@@ -245,7 +434,9 @@ class Graph:
         for nd in d.get("nodes", []):
             nd = dict(nd)
             nd["pos"] = tuple(nd.get("pos", (0.0, 0.0)))
-            g.nodes[nd["id"]] = NodeInstance(**{k: nd[k] for k in ("id", "type_id", "params", "pos", "collapsed") if k in nd})
+            g.nodes[nd["id"]] = NodeInstance(
+                **{k: nd[k] for k in ("id", "type_id", "params", "pos", "collapsed") if k in nd}
+            )
         for ld in d.get("links", []):
             g.links.append(Link(**ld))
         for loop_dict in d.get("loops", []):

@@ -1,7 +1,7 @@
 """Engine package."""
 
 from .cache import Cache, content_hash
-from .execute import Executor, NodeReport, RunReport
+from .execute import CancellationToken, Executor, NodeReport, RunReport
 from .graph import SUBWORKFLOW_TYPE_ID, Graph, GroupDef, Link, NodeInstance, ValidationError
 from .loops import (
     DEFAULT_MAX_ITERATIONS,
@@ -21,7 +21,7 @@ from .nodes import (
     list_nodes,
     node,
 )
-from .persist import load_graph, save_graph
+from .persist import export_comfy_workflow_api, import_comfy_workflow_api, load_graph, save_graph
 from .subworkflows import (
     DEFAULT_MAX_RECURSIONS,
     build_inner_graph,
@@ -31,6 +31,7 @@ from .subworkflows import (
 )
 from .types import (
     ANY,
+    Any,
     DataType,
     Field,
     Image,
@@ -47,7 +48,9 @@ __all__ = [
     "DEFAULT_MAX_RECURSIONS",
     "END_CONDITION_TYPE_ID",
     "SUBWORKFLOW_TYPE_ID",
+    "Any",
     "Cache",
+    "CancellationToken",
     "DataType",
     "ExecCtx",
     "Executor",
@@ -73,8 +76,10 @@ __all__ = [
     "content_hash",
     "describe_subworkflow",
     "expand_subworkflow_node",
+    "export_comfy_workflow_api",
     "get_node",
     "get_type",
+    "import_comfy_workflow_api",
     "list_nodes",
     "list_types",
     "load_graph",

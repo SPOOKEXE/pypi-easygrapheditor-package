@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from typing import Any
 
 import numpy as np
 
@@ -32,14 +33,23 @@ def arithmetic(
     return abs(res) if absolute else res
 
 
-@node(category="Simulate", color="purple", description="Async staged task demo (planning/fetching/...).")
+@node(
+    category="Simulate",
+    color="purple",
+    description="Async staged task demo (planning/fetching/...).",
+    inputs=[PortDef("after", "After", "data.ANY", "in", required=False)],
+    outputs=[PortDef("done", "Done", "data.NUMBER", "out")],
+)
 async def staged_task(
     ctx: ExecCtx,
+    after: Any = None,
     seconds: float = Param(2.0, kind="number", label="Seconds"),  # type: ignore[no-untyped-def]
     label: str = Param("left", kind="text", label="Label"),  # type: ignore[no-untyped-def]
 ) -> float:
+    _ = after
     stages = ["planning", "fetching", "thinking", "writing", "checking"]
     for i, stage in enumerate(stages):
+        ctx.check_cancelled()
         ctx.report(stage, (i + 1) / len(stages))
         await asyncio.sleep(float(seconds) / len(stages))
     return float(seconds)
@@ -59,10 +69,14 @@ def _bilinear_upsample(lattice: np.ndarray, res: int) -> np.ndarray:
     q01 = lattice[y0[:, None], x0[None, :] + 1]
     q10 = lattice[y0[:, None] + 1, x0[None, :]]
     q11 = lattice[y0[:, None] + 1, x0[None, :] + 1]
-    return (q00 * (1 - fy) * (1 - fx) + q01 * (1 - fy) * fx + q10 * fy * (1 - fx) + q11 * fy * fx).astype(np.float32)
+    return (
+        q00 * (1 - fy) * (1 - fx) + q01 * (1 - fy) * fx + q10 * fy * (1 - fx) + q11 * fy * fx
+    ).astype(np.float32)
 
 
-def _value_noise(res: int, freq: float, seed: float, octaves: int, gain: float, ridged: bool) -> np.ndarray:
+def _value_noise(
+    res: int, freq: float, seed: float, octaves: int, gain: float, ridged: bool
+) -> np.ndarray:
     rng = np.random.default_rng(int(seed * 1000 + 7919) % (2**32 - 1))
     out = np.zeros((res, res), dtype=np.float64)
     amp, f, total = 1.0, max(1, round(freq)), 0.0
@@ -90,7 +104,9 @@ def _sample_bilinear(field: np.ndarray, ys: np.ndarray, xs: np.ndarray) -> np.nd
     q01 = field[y0, np.clip(x0 + 1, 0, w - 1)]
     q10 = field[np.clip(y0 + 1, 0, h - 1), x0]
     q11 = field[np.clip(y0 + 1, 0, h - 1), np.clip(x0 + 1, 0, w - 1)]
-    return (q00 * (1 - fy) * (1 - fx) + q01 * (1 - fy) * fx + q10 * fy * (1 - fx) + q11 * fy * fx).astype(np.float32)
+    return (
+        q00 * (1 - fy) * (1 - fx) + q01 * (1 - fy) * fx + q10 * fy * (1 - fx) + q11 * fy * fx
+    ).astype(np.float32)
 
 
 @node(category="Generate", color="blue", description="Value noise field 0..1.")
@@ -102,7 +118,9 @@ def noise(
     gain: float = Param(0.5, kind="float_slider", label="Gain", min=0.1, max=1.0, step=0.05),  # type: ignore[no-untyped-def]
 ) -> Field:
     res = int(resolution)
-    return Field(data=_value_noise(res, float(frequency), float(seed), int(octaves), float(gain), False))
+    return Field(
+        data=_value_noise(res, float(frequency), float(seed), int(octaves), float(gain), False)
+    )
 
 
 @node(category="Generate", color="blue", description="Ridged value noise field 0..1.")
@@ -114,7 +132,9 @@ def ridged(
     gain: float = Param(0.5, kind="float_slider", label="Gain", min=0.1, max=1.0, step=0.05),  # type: ignore[no-untyped-def]
 ) -> Field:
     res = int(resolution)
-    return Field(data=_value_noise(res, float(frequency), float(seed), int(octaves), float(gain), True))
+    return Field(
+        data=_value_noise(res, float(frequency), float(seed), int(octaves), float(gain), True)
+    )
 
 
 @node(
@@ -123,10 +143,17 @@ def ridged(
     category="Filter",
     color="green",
     description="Warp one field by another (amount in pixels).",
-    inputs=[PortDef("field_in", "In", "data.FIELD", "in"), PortDef("warp_by", "By", "data.FIELD", "in")],
+    inputs=[
+        PortDef("field_in", "In", "data.FIELD", "in"),
+        PortDef("warp_by", "By", "data.FIELD", "in"),
+    ],
     outputs=[PortDef("out", "Out", "data.FIELD", "out")],
 )
-def domain_warp(field_in: Field, warp_by: Field, amount: float = Param(12.0, kind="float_slider", label="Amount", min=0, max=32, step=0.5)) -> Field:  # type: ignore[no-untyped-def]
+def domain_warp(
+    field_in: Field,
+    warp_by: Field,
+    amount: float = Param(12.0, kind="float_slider", label="Amount", min=0, max=32, step=0.5),
+) -> Field:  # type: ignore[no-untyped-def]
     h, w = field_in.data.shape
     # Second field drives an angle + magnitude warp; centred so mean-zero warps less.
     yy, xx = np.mgrid[0:h, 0:w]
@@ -150,7 +177,9 @@ def combine(
     a: Field,
     b: Field,
     amount: float = Param(0.5, kind="float_slider", label="Amount", min=0, max=1, step=0.05),  # type: ignore[no-untyped-def]
-    mode: str = Param("maximum", kind="select", label="Mode", options=["maximum", "add", "multiply", "min"]),  # type: ignore[no-untyped-def]
+    mode: str = Param(
+        "maximum", kind="select", label="Mode", options=["maximum", "add", "multiply", "min"]
+    ),  # type: ignore[no-untyped-def]
 ) -> Field:
     t = float(amount)
     if mode == "add":
@@ -175,9 +204,13 @@ def combine(
 )
 def erode(
     field_in: Field,
-    thermal_passes: float = Param(30.0, kind="step_slider", label="Thermal passes", min=0, max=200, step=1),  # type: ignore[no-untyped-def]
+    thermal_passes: float = Param(
+        30.0, kind="step_slider", label="Thermal passes", min=0, max=200, step=1
+    ),  # type: ignore[no-untyped-def]
     talus: float = Param(0.01, kind="float_slider", label="Talus", min=0, max=0.2, step=0.005),  # type: ignore[no-untyped-def]
-    spin_passes: float = Param(20.0, kind="step_slider", label="Spin passes", min=0, max=100, step=1),  # type: ignore[no-untyped-def]
+    spin_passes: float = Param(
+        20.0, kind="step_slider", label="Spin passes", min=0, max=100, step=1
+    ),  # type: ignore[no-untyped-def]
 ) -> Field:
     h = field_in.data.astype(np.float32).copy()
     passes = int(min(max(float(thermal_passes), 0), 200))
@@ -216,9 +249,9 @@ def slope(field_in: Field) -> Field:
 
 _ALPINE = np.array(
     [
-        [ 30,  70, 160],  # deep water
-        [ 60, 120, 200],  # shallow water
-        [ 70, 140,  90],  # lowland
+        [30, 70, 160],  # deep water
+        [60, 120, 200],  # shallow water
+        [70, 140, 90],  # lowland
         [110, 160, 100],  # forest
         [150, 150, 130],  # rock
         [240, 240, 245],  # snow
@@ -288,7 +321,10 @@ def readout(value_in) -> float:  # type: ignore[no-untyped-def]
     inputs=[PortDef("field_in", "In", "data.FIELD", "in")],
     outputs=[PortDef("out", "Out", "data.FIELD", "out")],
 )
-def terrace(field_in: Field, steps: float = Param(5.0, kind="step_slider", label="Steps", min=2, max=16, step=1)) -> Field:  # type: ignore[no-untyped-def]
+def terrace(
+    field_in: Field,
+    steps: float = Param(5.0, kind="step_slider", label="Steps", min=2, max=16, step=1),
+) -> Field:  # type: ignore[no-untyped-def]
     s = max(2, int(float(steps)))
     return Field(data=(np.floor(field_in.data * s) / (s - 1)).clip(0, 1).astype(np.float32))
 
@@ -302,7 +338,10 @@ def terrace(field_in: Field, steps: float = Param(5.0, kind="step_slider", label
     inputs=[PortDef("field_in", "In", "data.FIELD", "in")],
     outputs=[PortDef("out", "Out", "data.FIELD", "out")],
 )
-def threshold(field_in: Field, cutoff: float = Param(0.5, kind="float_slider", label="Cutoff", min=0, max=1, step=0.01)) -> Field:  # type: ignore[no-untyped-def]
+def threshold(
+    field_in: Field,
+    cutoff: float = Param(0.5, kind="float_slider", label="Cutoff", min=0, max=1, step=0.01),
+) -> Field:  # type: ignore[no-untyped-def]
     return Field(data=(field_in.data >= float(cutoff)).astype(np.float32))
 
 

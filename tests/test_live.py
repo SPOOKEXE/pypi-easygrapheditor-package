@@ -42,7 +42,14 @@ def _loop_page() -> None:
     import easygrapheditor
 
     pkg = Path(easygrapheditor.__file__).resolve()
-    sys.argv = ["view_demo.py", "--demo", "loop", "--ui", "streamlit"]
+    sys.argv = [
+        "view_demo.py",
+        "--demo",
+        "loop",
+        "--ui",
+        "--backend",
+        "streamlit",
+    ]
     sys.path.insert(0, str(pkg.parents[1]))  # .../easygrapheditor/src
     sys.path.insert(0, str(pkg.parents[2] / "examples"))  # .../easygrapheditor/examples
     import view_demo
@@ -69,7 +76,6 @@ def test_streamlit_live_editor_renders_and_clears():
 
 def _area_boxes(g):
     import pygame
-
     from easygrapheditor.ui.adapters import PygameStyle, compute_boxes
 
     area = pygame.Rect(12, 46, 682 - 24, 700 - 58)
@@ -78,7 +84,6 @@ def _area_boxes(g):
 
 def test_pygame_drag_moves_node():
     import pygame
-
     from easygrapheditor.ui.adapters import PygameStyle, compute_boxes
     from easygrapheditor.ui.pygame_app import run_pygame
 
@@ -104,7 +109,6 @@ def test_pygame_drag_moves_node():
 
 def test_pygame_marquee_group_ungroup():
     import pygame
-
     from easygrapheditor.ui.pygame_app import run_pygame
 
     g = Graph()
@@ -116,7 +120,7 @@ def test_pygame_marquee_group_ungroup():
     pygame.init()
     pygame.event.clear()
     try:
-        area, boxes = _area_boxes(g)
+        _area, boxes = _area_boxes(g)
         ids = sorted(boxes)
         x0 = min(boxes[i].x for i in ids) - 10
         y0 = min(boxes[i].y for i in ids) - 10
@@ -139,7 +143,6 @@ def test_pygame_marquee_group_ungroup():
 
 def test_pygame_right_click_unplug_and_reroute():
     import pygame
-
     from easygrapheditor.ui.pygame_app import _port_anchors, run_pygame
 
     g = Graph()
@@ -153,7 +156,7 @@ def test_pygame_right_click_unplug_and_reroute():
     pygame.init()
     pygame.event.clear()
     try:
-        area, boxes = _area_boxes(g)
+        _area, boxes = _area_boxes(g)
         ins, outs = _port_anchors(g, boxes)
         ix, iy = next((x, y) for p, x, y in ins[a.id] if p == "a")
         # right-click the linked input: unplug
@@ -164,7 +167,7 @@ def test_pygame_right_click_unplug_and_reroute():
         # reroute: drag from output, drop on the readout input
         pygame.init()
         pygame.event.clear()
-        area, boxes = _area_boxes(g)
+        _area, boxes = _area_boxes(g)
         ins, outs = _port_anchors(g, boxes)
         ox, oy = next((x, y) for p, x, y in outs[n.id] if p == "out")
         ix, iy = next((x, y) for p, x, y in ins[r.id] if p == "value_in")
@@ -179,7 +182,6 @@ def test_pygame_right_click_unplug_and_reroute():
 
 def test_pygame_pan_zoom_copy_paste():
     import pygame
-
     from easygrapheditor.ui.pygame_app import run_pygame
 
     g = Graph()
