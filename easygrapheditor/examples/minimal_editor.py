@@ -1,4 +1,4 @@
-"""Minimal editor: constant Number -> Readout. Run: uv run easygrapheditor/examples/minimal_editor.py"""
+"""Minimal editor: Number feeds a staged task. Run this file to inspect it."""
 
 import sys
 from pathlib import Path
@@ -14,8 +14,9 @@ import easygrapheditor as ege
 def build() -> Graph:
     """Build the demo graph (also used by view_demo.py / UI adapters)."""
     g = Graph()
-    g.add_node("input.number", params={"value": 2.0}, pos=(0, 0))
-    g.add_node("simulate.staged_task", params={"seconds": 0.2, "label": "left"}, pos=(200, 0))
+    number = g.add_node("input.number", params={"value": 2.0}, pos=(0, 0))
+    staged = g.add_node("simulate.staged_task", params={"seconds": 0.2, "label": "left"}, pos=(280, 0))
+    g.add_link(number.id, "out", staged.id, "after")
     return g
 
 

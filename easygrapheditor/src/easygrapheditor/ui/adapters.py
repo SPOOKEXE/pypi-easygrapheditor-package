@@ -428,6 +428,12 @@ def dispatch_web_action(adapter: GraphAdapter, action: dict[str, Any]) -> dict[s
                 if state.snap_to_grid:
                     x, y = round(x / state.grid_size) * state.grid_size, round(y / state.grid_size) * state.grid_size
                 graph.nodes[nid].pos = (x, y)
+            viewport = data.get("viewport")
+            if isinstance(viewport, dict):
+                for key in ("x", "y", "zoom"):
+                    if key in viewport:
+                        setattr(state.viewport, key, float(viewport[key]))
+                state.viewport.clamp()
         state.apply("move nodes", move, debounce_live=False, affects_execution=False)
     elif kind == "connect":
         adapter.mutate("connect nodes", lambda: connect(graph, str(data["from_node"]), str(data["from_port"]), str(data["to_node"]), str(data["to_port"])))
@@ -789,10 +795,14 @@ def gradio_register_grapheditor(host: Any, source: GraphAdapter | EditorState | 
 
         def _on_web_action(_html_value: Any, evt: gr.EventData) -> tuple:
             """Use Gradio's EventData custom payload, never the HTML value."""
+            action = decode_gradio_action(evt)
             result = handle_gradio_event(adapter, evt)
             message = result.get("error", "")
             refreshed = list(_refresh_full())
-            refreshed[2] = gr.skip()
+            # Local selection and pan updates already render in the SVG. Replacing
+            # it on pointer down would cancel a node drag before pointer up.
+            if action and action.get("type") in {"select", "viewport"}:
+                refreshed[2] = gr.skip()
             return (*refreshed, gr.Markdown(message, visible=bool(message)))
 
         _on_web_action.__annotations__["evt"] = gr.EventData
@@ -801,14 +811,19 @@ def gradio_register_grapheditor(host: Any, source: GraphAdapter | EditorState | 
         tab_new.click(_on_tab_new, outputs=[*outs_full, tab_select])
         tab_close.click(_on_tab_close, outputs=[*outs_full, tab_select])
         live_timer = gr.Timer(0.5)
+        last_timer_report = adapter.report
 
         def _on_live_tick() -> tuple:
+            nonlocal last_timer_report
             adapter.consume_live_run()
-            summary_value, canvas_value, _web_value, status_value, gallery_value, table_value = _refresh()
-            return (summary_value, canvas_value, status_value, gallery_value, table_value,
+            summary_value, canvas_value, web_value, status_value, gallery_value, table_value = _refresh()
+            if adapter.report is last_timer_report:
+                web_value = gr.skip()
+            last_timer_report = adapter.report
+            return (summary_value, canvas_value, web_value, status_value, gallery_value, table_value,
                     adapter.inspector_data())
 
-        live_timer.tick(_on_live_tick, outputs=[summary, canvas, status, gallery, table, inspector_panel])
+        live_timer.tick(_on_live_tick, outputs=[summary, canvas, web_canvas, status, gallery, table, inspector_panel])
         add_btn.click(_on_add, inputs=[type_drop, live_box], outputs=outs_note)
         link_btn.click(_on_link, inputs=[from_node, from_port, to_node, to_port, live_box], outputs=outs_note)
         unlink_btn.click(_on_unlink, inputs=[unlink_drop, live_box], outputs=outs_note)
